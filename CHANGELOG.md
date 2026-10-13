@@ -1,6 +1,7 @@
 # Changelog
 
-All notable changes to Lab Loop™ (ml-labloop + ml-scientist) are
+All notable changes to GnosisLab-VM + GnosisLab (formerly Lab Loop /
+ml-labloop + ml-scientist) are
 recorded here. Format follows [Keep a
 Changelog](https://keepachangelog.com/en/1.1.0/); this project uses
 calendar-dated releases until a versioning scheme is adopted.

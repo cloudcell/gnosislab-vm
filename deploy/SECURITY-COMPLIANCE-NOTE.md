@@ -1,7 +1,8 @@
-# SECURITY-COMPLIANCE-NOTE — labloop vs. industry security standards
+# SECURITY-COMPLIANCE-NOTE — GnosisLab-VM vs. industry security standards
 
-Companion to [SECURITY-MANUAL.md](SECURITY-MANUAL.md) (the binding
-contract). This note
+Companion to [SECURITY-MANUAL.md](SECURITY-MANUAL.md) — its binding
+contract in the design-by-contract sense (a behavioral specification,
+not a legal agreement between people). This note
 records *where the design stands against industry practice* — which
 conventions it meets or exceeds, which it deliberately does not, and
 what the documented escalation path is for each gap.
@@ -13,7 +14,7 @@ AU-6 audit), and the practices of production agent-sandbox systems
 
 ## 1. Controls that meet or exceed the standard
 
-| Control | Convention | Labloop implementation |
+| Control | Convention | GnosisLab-VM implementation |
 | ------- | ---------- | ---------------------- |
 | Execution boundary | microVM-class isolation (Firecracker/Kata tier); a plain container is *not* a sandbox | KVM guest per user clone — strongest tier |
 | Immutable image | Baked images; runtime mutation banned | `ReadOnly=true` rootfs; growth only via lanes |

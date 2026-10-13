@@ -1,14 +1,15 @@
 # AGENT-LAB-GUIDE — orientation for agents working inside a lab VM
 
-You are running inside a **labloop VM** — an isolated KVM guest built
+You are running inside a **GnosisLab-VM** guest — an isolated KVM VM built
 for ML experimentation. Untrusted/generated code is *expected* to run
 here; the security model below is what keeps it safe. Read this before
 touching anything.
 
 > **REQUIRED READING:** `SECURITY-MANUAL.md` (same directory — also
-> symlinked into the workspace). It is the binding contract: the threat
+> symlinked into the workspace). It is the binding contract (in the
+> design-by-contract sense — a behavioral spec, not a legal agreement): the threat
 > model, the zone rules, and the **four install lanes** (uv / micromamba
-> + `/opt/local` / `labloop-build` / `tlmgr --usermode`). If this guide
+> / `/opt/local` / `labloop-build` / `tlmgr --usermode`). If this guide
 > and the manual ever disagree, the manual wins.
 >
 > **FIRST RUN?** `GENESIS-RESEARCH-PROMPT.md` (same directory) is the
@@ -108,7 +109,7 @@ inspect before executing.
 
 | Server       | MCP                  | GUI   | Role               |
 | ------------ | -------------------- | ----- | ------------------ |
-| `agora`      | `127.0.0.1:28050/mcp`| 28051 | status hub / topology |
+| `agora`      | `127.0.0.1:28050/mcp` | 28051 | status hub / topology |
 | `arete`      | `127.0.0.1:28060/mcp`| 28061 | optimizer          |
 | `zetesis`    | `127.0.0.1:28070/mcp`| 28071 | research/search    |
 | `episteme`   | `127.0.0.1:28080/mcp`| 28081 | executor + state   |

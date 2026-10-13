@@ -1,7 +1,10 @@
-# SECURITY-MANUAL — operating rules for the labloop VM
+# SECURITY-MANUAL — operating rules for the GnosisLab-VM guest
 
-This manual is the **binding contract** for working inside a labloop
-VM. `AGENT-LAB-GUIDE.md` orients you; this document tells you what is
+This manual is the **binding contract** for working inside a
+GnosisLab-VM — *contract* in the programming sense (design by
+contract): a specification of invariants that agents, operators, and
+tooling must satisfy, not a legal agreement between people.
+`AGENT-LAB-GUIDE.md` orients you; this document tells you what is
 permitted, what is forbidden, and *why*. Read it before installing
 anything, running anything, or touching any account but your own.
 
