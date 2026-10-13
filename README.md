@@ -1,10 +1,25 @@
+<!-- markdownlint-disable MD033 MD041 MD001 -->
+<div align="center">
+
 # GnosisLab-VM
 
-**A virtualized, isolated environment for GnosisLab research workflows.**
+### A virtualized, isolated environment for GnosisLab research workflows
+
+**Build a sealed KVM lab template once — clone a trusted sandbox for every experiment.**
 
 [![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
+[![Hygiene](https://github.com/cloudcell/gnosislab-vm/actions/workflows/repository-hygiene.yml/badge.svg)](https://github.com/cloudcell/gnosislab-vm/actions/workflows/repository-hygiene.yml)
 [![GnosisLab](https://img.shields.io/badge/scientific_runtime-GnosisLab-555)](https://github.com/cloudcell/gnosislab)
+[![VM Images](https://img.shields.io/badge/Hugging%20Face-VM%20images-yellow?logo=huggingface)](https://huggingface.co/buckets/cloudcell/LabLoop)
+[![Platform](https://img.shields.io/badge/platform-Linux%20KVM%2Flibvirt-informational)](https://github.com/cloudcell/gnosislab-vm)
+[![Discord](https://img.shields.io/discord/903850592957517835?logo=discord&label=Discord)](https://discord.com/invite/v9JVtpVuUT)
 [![Status: alpha](https://img.shields.io/badge/status-alpha-orange)](CHANGELOG.md)
+
+[Requirements](#requirements) · [Build locally](#getting-started-build-locally) · [Published image](#using-a-published-vm-image) · [Operations](#operations) · [MCP](#mcp-connectivity) · [Security](SECURITY.md) · [GnosisLab](https://github.com/cloudcell/gnosislab) · [Docs](https://loop.cloudcell.workers.dev/docs)
+
+</div>
+
+---
 
 GnosisLab-VM provides a KVM/libvirt virtual machine for running [GnosisLab](https://github.com/cloudcell/gnosislab) and AI-assisted or human-led experiments with additional isolation between the agent interface, trusted scientific services, and execution of potentially untrusted code. It includes a VM template builder, clone/import workflows, containerized execution environments, data-transfer tooling, and security/readiness checks.
 
