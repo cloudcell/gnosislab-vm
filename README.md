@@ -1,6 +1,6 @@
 # LabLoop: your AI scientist
 
-[![License](https://img.shields.io/badge/License-Apache_2.0-blue)](https://github.com/cloudcell/labloop/LICENSE)
+[![License](https://img.shields.io/badge/License-Apache_2.0-blue)](https://github.com/cloudcell/gnosislab-vm/LICENSE)
 
 ## A persistent scientific loop for AI agents
 
