@@ -17,7 +17,7 @@
 [![Cite](https://img.shields.io/badge/cite%20this%20software-CITATION.cff-8A2BE2)](CITATION.cff)
 [![Status: alpha](https://img.shields.io/badge/status-alpha-orange)](CHANGELOG.md)
 
-[Requirements](#requirements) · [Build locally](#getting-started-build-locally) · [Published image](#using-a-published-vm-image) · [Operations](#operations) · [MCP](#mcp-connectivity) · [Security](SECURITY.md) · [Citation](CITATION.cff) · [GnosisLab](https://github.com/cloudcell/gnosislab) · [Docs](https://loop.cloudcell.workers.dev/docs)
+[Requirements](#requirements) · [Build locally](#getting-started-build-locally) · [Published image](#using-a-published-vm-image) · [Other hypervisors](#running-without-kvm-virtualbox-macos) · [Operations](#operations) · [MCP](#mcp-connectivity) · [Security](SECURITY.md) · [Citation](CITATION.cff) · [GnosisLab](https://github.com/cloudcell/gnosislab) · [Docs](https://loop.cloudcell.workers.dev/docs)
 
 </div>
 
@@ -87,6 +87,25 @@ sha256sum -c image.qcow2.sha256
 
 A checksum obtained from the same untrusted source only detects corruption, **not** a malicious replacement. Review the image provenance and [security policy](SECURITY.md) before use.
 
+## Running without KVM (VirtualBox, macOS)
+
+The build and import pipeline (`00`–`02`, `20`) is **Linux + KVM/libvirt only** — it requires `qemu:///system`, OVMF, and the QEMU guest agent, none of which exist on VirtualBox or macOS. But a released `.qcow2` is a plain Linux Mint disk: convert it and it boots under other hypervisors.
+
+`./12-export-image-vmdk.sh <image.qcow2>` produces a sparse `.vmdk`; add `--ova` to also get a `.ova` appliance (streamOptimized VMDK + generated OVF descriptor). The only host dependency is `qemu-img` (`qemu-utils`), already present on any KVM build host — run the conversion there, not on the machine that will run the VM.
+
+| Target | Path |
+| --- | --- |
+| **VirtualBox** (Windows/Linux x86) | Import the `.ova` (File ▸ Import Appliance, tick **EFI**) — or create an "Ubuntu (64-bit)" VM, attach the `.vmdk`, enable EFI under Settings ▸ System. EFI is required: the image is UEFI/OVMF and will not boot BIOS. |
+| **VMware** Workstation/Fusion (x86) | Import the `.ova`, then enable UEFI in the VM's settings. |
+| **UTM** (macOS, Apple Silicon) | Reads `.qcow2` directly, but the image is x86-64 — it runs **emulated**, not virtualized: fine for inspection, too slow for real work. |
+| **VirtualBox/Parallels** (Apple Silicon) | Not supported — the image needs x86-64; an ARM guest build does not exist yet. |
+
+What does **not** survive the move off KVM:
+
+- **Data channels** — `80-ingest`/`90-extract` talk to the QEMU guest agent over virtio-serial, a transport only QEMU provides. Use VirtualBox shared folders or scp instead.
+- **Display plumbing** — the virtio-gpu/EDID resolution setup assumes virtio video; install the hypervisor's guest additions/tools instead.
+- **Threat model** — the security documentation takes KVM as the isolation boundary. VirtualBox and UTM are type-2 hypervisors — a different boundary with a different bug surface. The VM is not a certified sandbox under any hypervisor.
+
 ## Operations
 
 Run the numbered commands **on the Linux host** from the repository root unless stated otherwise.
@@ -98,6 +117,7 @@ Run the numbered commands **on the Linux host** from the repository root unless 
 | `02-create-vm-from-template.sh <name>` | Clone a VM for a user or experiment. |
 | `10-upload-template-to-hf.sh` | Seal and upload a candidate image to the configured HF bucket. |
 | `11-release-template.sh` | Promote a candidate image to the configured release bucket. |
+| `12-export-image-vmdk.sh <image> [--ova]` | Repackage a QCOW2 as VMDK/OVA for VirtualBox, VMware, UTM. |
 | `20-import-lab-vm.sh <image> [name]` | Import a downloaded QCOW2 image. |
 | `30-ensure-lab-tools.sh <vm>\|all` | Reconcile tools/configuration on an existing VM. |
 | `80-ingest-lab-data.sh <vm> <src> [batch]` | Stage host data into the guest through the approved path. |
