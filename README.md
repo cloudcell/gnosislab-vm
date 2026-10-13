@@ -13,9 +13,10 @@
 [![VM Images](https://img.shields.io/badge/Hugging%20Face-VM%20images-yellow?logo=huggingface)](https://huggingface.co/buckets/cloudcell/LabLoop)
 [![Platform](https://img.shields.io/badge/platform-Linux%20KVM%2Flibvirt-informational)](https://github.com/cloudcell/gnosislab-vm)
 [![Discord](https://img.shields.io/discord/903850592957517835?logo=discord&label=Discord)](https://discord.com/invite/v9JVtpVuUT)
+[![Cite](https://img.shields.io/badge/cite%20this%20software-CITATION.cff-8A2BE2)](CITATION.cff)
 [![Status: alpha](https://img.shields.io/badge/status-alpha-orange)](CHANGELOG.md)
 
-[Requirements](#requirements) · [Build locally](#getting-started-build-locally) · [Published image](#using-a-published-vm-image) · [Operations](#operations) · [MCP](#mcp-connectivity) · [Security](SECURITY.md) · [GnosisLab](https://github.com/cloudcell/gnosislab) · [Docs](https://loop.cloudcell.workers.dev/docs)
+[Requirements](#requirements) · [Build locally](#getting-started-build-locally) · [Published image](#using-a-published-vm-image) · [Operations](#operations) · [MCP](#mcp-connectivity) · [Security](SECURITY.md) · [Citation](CITATION.cff) · [GnosisLab](https://github.com/cloudcell/gnosislab) · [Docs](https://loop.cloudcell.workers.dev/docs)
 
 </div>
 
