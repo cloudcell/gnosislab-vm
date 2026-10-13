@@ -17,10 +17,9 @@
 [![VM image hosts](https://img.shields.io/badge/VM%20image-Linux%20%7C%20Windows%20%7C%20macOS%2A-blue)](#running-without-kvm-virtualbox-macos)
 [![Build and management](https://img.shields.io/badge/build%20%26%20management-Linux%20KVM%2Flibvirt-informational)](#requirements)
 [![Discord](https://img.shields.io/discord/903850592957517835?logo=discord&label=Discord)](https://discord.com/invite/v9JVtpVuUT)
-[![Cite](https://img.shields.io/badge/cite%20this%20software-CITATION.cff-8A2BE2)](CITATION.cff)
 [![Status: alpha](https://img.shields.io/badge/status-alpha-orange)](CHANGELOG.md)
 
-[Requirements](#requirements) · [Build locally](#getting-started-build-locally) · [Published image](#using-a-published-vm-image) · [Other hypervisors](#running-without-kvm-virtualbox-macos) · [Operations](#operations) · [MCP](#mcp-connectivity) · [Security](SECURITY.md) · [Citation](CITATION.cff) · [GnosisLab](https://github.com/cloudcell/gnosislab) · [Docs](https://loop.cloudcell.workers.dev/docs)
+[Requirements](#requirements) · [Build locally](#getting-started-build-locally) · [Published image](#using-a-published-vm-image) · [Other hypervisors](#running-without-kvm-virtualbox-macos) · [Operations](#operations) · [MCP](#mcp-connectivity) · [Security](SECURITY.md) · [Citation](https://doi.org/10.5281/zenodo.23351184) · [GnosisLab](https://github.com/cloudcell/gnosislab) · [Docs](https://loop.cloudcell.workers.dev/docs)
 
 </div>
 
