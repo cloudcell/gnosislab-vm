@@ -5,6 +5,8 @@
 
 ### A virtualized, isolated environment for GnosisLab research workflows
 
+**GnosisLab-VM images can run on Linux, Windows and macOS<sup>*</sup>**
+
 **Build a sealed KVM lab template once — clone a trusted sandbox for every experiment.**
 
 [![DOI](https://zenodo.org/badge/23351184.svg)](https://doi.org/10.5281/zenodo.23351184)
@@ -12,7 +14,8 @@
 [![Hygiene](https://github.com/cloudcell/gnosislab-vm/actions/workflows/repository-hygiene.yml/badge.svg)](https://github.com/cloudcell/gnosislab-vm/actions/workflows/repository-hygiene.yml)
 [![GnosisLab](https://img.shields.io/badge/scientific_runtime-GnosisLab-555)](https://github.com/cloudcell/gnosislab)
 [![VM Images](https://img.shields.io/badge/Hugging%20Face-VM%20images-yellow?logo=huggingface)](https://huggingface.co/buckets/cloudcell/LabLoop)
-[![Platform](https://img.shields.io/badge/platform-Linux%20KVM%2Flibvirt-informational)](https://github.com/cloudcell/gnosislab-vm)
+[![VM image hosts](https://img.shields.io/badge/VM%20image-Linux%20%7C%20Windows%20%7C%20macOS%2A-blue)](#running-without-kvm-virtualbox-macos)
+[![Build and management](https://img.shields.io/badge/build%20%26%20management-Linux%20KVM%2Flibvirt-informational)](#requirements)
 [![Discord](https://img.shields.io/discord/903850592957517835?logo=discord&label=Discord)](https://discord.com/invite/v9JVtpVuUT)
 [![Cite](https://img.shields.io/badge/cite%20this%20software-CITATION.cff-8A2BE2)](CITATION.cff)
 [![Status: alpha](https://img.shields.io/badge/status-alpha-orange)](CHANGELOG.md)
@@ -20,6 +23,8 @@
 [Requirements](#requirements) · [Build locally](#getting-started-build-locally) · [Published image](#using-a-published-vm-image) · [Other hypervisors](#running-without-kvm-virtualbox-macos) · [Operations](#operations) · [MCP](#mcp-connectivity) · [Security](SECURITY.md) · [Citation](CITATION.cff) · [GnosisLab](https://github.com/cloudcell/gnosislab) · [Docs](https://loop.cloudcell.workers.dev/docs)
 
 </div>
+
+**<sup>*</sup> Platform compatibility disclaimer:** Cross-platform availability refers to **running or emulating a compatible Linux VM image**, not to identical support for every host OS. The automated build, clone, import, management and QEMU guest-agent data-transfer scripts currently target **x86-64 Linux with KVM/libvirt**. On Windows and Intel-based macOS, a compatible x86-64 hypervisor can use a converted disk image or appliance; on Apple Silicon, the existing x86-64 image requires emulation and can be much slower. **Windows ARM64 and native ARM64 guest images are not currently supported.** Non-KVM configurations have not undergone the same functional or security validation. See [Running without KVM](#running-without-kvm-virtualbox-macos) for details.
 
 ---
 
@@ -44,6 +49,8 @@ The five GnosisLab services are **Agora**, **Arete**, **Zetesis**, **Episteme**,
 **Security boundary:** KVM is the host isolation layer. Containers, accounts, filesystem permissions, firewall rules, and constrained execution wrappers provide additional separation inside the guest. Agent-supplied code and returned artifacts remain untrusted. Anyone with guest administrative credentials can defeat in-guest boundaries; host security depends on QEMU, libvirt, the host kernel, configuration, and patching. See [Security](SECURITY.md) and [the guest security manual](deploy/SECURITY-MANUAL.md).
 
 ## Requirements
+
+The following are requirements for the **Linux/KVM build, import and VM-management tools**. Running a prebuilt image under another hypervisor is described [below](#running-without-kvm-virtualbox-macos).
 
 - x86-64 Linux host with hardware virtualization enabled and `/dev/kvm` available.
 - Working QEMU/KVM, system libvirt, `virsh`, `virt-install`, `virt-clone`, UEFI firmware (OVMF), and `virt-sysprep`/libguestfs tooling. The build script can help identify/install missing system packages.
@@ -89,22 +96,25 @@ A checksum obtained from the same untrusted source only detects corruption, **no
 
 ## Running without KVM (VirtualBox, macOS)
 
-The build and import pipeline (`00`–`02`, `20`) is **Linux + KVM/libvirt only** — it requires `qemu:///system`, OVMF, and the QEMU guest agent, none of which exist on VirtualBox or macOS. But a released `.qcow2` is a plain Linux Mint disk: convert it and it boots under other hypervisors.
+The build and import pipeline (`00`–`02`, `20`) is **Linux + KVM/libvirt only** — it requires `qemu:///system`, OVMF, and the QEMU guest agent, none of which exist on VirtualBox or macOS. But a released `.qcow2` is a Linux Mint x86-64 virtual disk that may be booted by a compatible alternative hypervisor after conversion or appropriate configuration.
 
-`./12-export-image-vmdk.sh <image.qcow2>` produces a sparse `.vmdk`; add `--ova` to also get a `.ova` appliance (streamOptimized VMDK + generated OVF descriptor). The only host dependency is `qemu-img` (`qemu-utils`), already present on any KVM build host — run the conversion there, not on the machine that will run the VM.
+`./12-export-image-vmdk.sh <image.qcow2>` produces a sparse `.vmdk`; add `--ova` to also create a `.ova` appliance (streamOptimized VMDK and generated OVF descriptor). Run the conversion on a machine with `qemu-img` available, such as the Linux/KVM build host.
 
 | Target | Path |
 | --- | --- |
-| **VirtualBox** (Windows/Linux x86) | Import the `.ova` (File ▸ Import Appliance, tick **EFI**) — or create an "Ubuntu (64-bit)" VM, attach the `.vmdk`, enable EFI under Settings ▸ System. EFI is required: the image is UEFI/OVMF and will not boot BIOS. |
-| **VMware** Workstation/Fusion (x86) | Import the `.ova`, then enable UEFI in the VM's settings. |
-| **UTM** (macOS, Apple Silicon) | Reads `.qcow2` directly, but the image is x86-64 — it runs **emulated**, not virtualized: fine for inspection, too slow for real work. |
-| **VirtualBox/Parallels** (Apple Silicon) | Not supported — the image needs x86-64; an ARM guest build does not exist yet. |
+| **VirtualBox** (Windows/Linux x86-64) | Import the `.ova` (File → Import Appliance, enable **EFI**) or create an x86-64 Linux VM, attach the `.vmdk` and enable EFI. |
+| **VMware** Workstation/Fusion (x86-64) | Import the `.ova` and configure UEFI firmware. |
+| **macOS Intel** | Use a compatible x86-64 hypervisor with UEFI support and the appropriate disk format. |
+| **UTM** (macOS Apple Silicon) | Can use `.qcow2`, but the available guest is x86-64 and must be **emulated**, not run as an ARM64 guest; expect substantially reduced performance. |
+| **VirtualBox/Parallels** (Apple Silicon) | The existing x86-64 image is not supported for native ARM virtualization; an ARM64 guest build does not currently exist. |
+| **Windows ARM64** | No supported or verified native guest image at present. |
 
-What does **not** survive the move off KVM:
+**Limitations outside the Linux/KVM deployment:**
 
-- **Data channels** — `80-ingest`/`90-extract` talk to the QEMU guest agent over virtio-serial, a transport only QEMU provides. Use VirtualBox shared folders or scp instead.
-- **Display plumbing** — the virtio-gpu/EDID resolution setup assumes virtio video; install the hypervisor's guest additions/tools instead.
-- **Threat model** — the security documentation takes KVM as the isolation boundary. VirtualBox and UTM are type-2 hypervisors — a different boundary with a different bug surface. The VM is not a certified sandbox under any hypervisor.
+- **Data movement:** `80-ingest` and `90-extract` depend on libvirt's QEMU guest-agent transport. They are not plug-and-play with alternative hypervisors. Replacing them with shared folders or SSH would change the security model and requires separate review.
+- **Display:** Virtio video and display settings may need replacement with the selected hypervisor's devices and guest additions.
+- **Isolation:** The documented host security boundary assumes KVM. Equivalent security assurances have **not** been verified for VirtualBox, VMware or UTM.
+- **Testing:** The ability to boot an image does not mean the project has completed full integration, functionality or security testing on that host platform.
 
 ## Operations
 
@@ -117,7 +127,7 @@ Run the numbered commands **on the Linux host** from the repository root unless 
 | `02-create-vm-from-template.sh <name>` | Clone a VM for a user or experiment. |
 | `10-upload-template-to-hf.sh` | Seal and upload a candidate image to the configured HF bucket. |
 | `11-release-template.sh` | Promote a candidate image to the configured release bucket. |
-| `12-export-image-vmdk.sh <image> [--ova]` | Repackage a QCOW2 as VMDK/OVA for VirtualBox, VMware, UTM. |
+| `12-export-image-vmdk.sh <image> [--ova]` | Convert a sealed QCOW2 into VMDK, optionally OVA, for compatible alternative hypervisors. |
 | `20-import-lab-vm.sh <image> [name]` | Import a downloaded QCOW2 image. |
 | `30-ensure-lab-tools.sh <vm>\|all` | Reconcile tools/configuration on an existing VM. |
 | `80-ingest-lab-data.sh <vm> <src> [batch]` | Stage host data into the guest through the approved path. |
