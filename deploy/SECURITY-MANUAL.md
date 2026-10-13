@@ -8,6 +8,11 @@ anything, running anything, or touching any account but your own.
 The governing principle is **security above all** (a-00 §5.11): when
 convenience and isolation conflict, isolation wins — every time.
 
+How this design maps to industry standards (NIST SP 800-190, CIS Docker
+Benchmark, production agent-sandbox practice) — including the deliberate
+gaps — is recorded in the companion
+[SECURITY-COMPLIANCE-NOTE.md](SECURITY-COMPLIANCE-NOTE.md).
+
 ## 1. The threat model in one paragraph
 
 The lab exists so that **generated, unreviewed, potentially hostile
@@ -315,4 +320,5 @@ defect** — report it; do not use it.
 *How this posture maps to industry standards (NIST SP 800-190, CIS
 Docker Benchmark, production agent-sandbox practice) — including the
 deliberate gaps and their escalation paths — is recorded in
-`SECURITY-COMPLIANCE-NOTE.md`, same directory.*
+[SECURITY-COMPLIANCE-NOTE.md](SECURITY-COMPLIANCE-NOTE.md), same
+directory.*

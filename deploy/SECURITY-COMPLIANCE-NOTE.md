@@ -1,6 +1,7 @@
 # SECURITY-COMPLIANCE-NOTE — labloop vs. industry security standards
 
-Companion to `SECURITY-MANUAL.md` (the binding contract). This note
+Companion to [SECURITY-MANUAL.md](SECURITY-MANUAL.md) (the binding
+contract). This note
 records *where the design stands against industry practice* — which
 conventions it meets or exceeds, which it deliberately does not, and
 what the documented escalation path is for each gap.
