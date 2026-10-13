@@ -66,12 +66,27 @@ by `deploy/SECURITY-COMPLIANCE-NOTE.md`:
 - **NIST SP 800-190**, *Application Container Security Guide* (2017)
 - **NIST SP 800-53 Rev. 5**, *Security and Privacy Controls for Information
   Systems and Organizations* (2020)
+- **NIST SP 800-125A**, *Security Recommendations for Server-based Hypervisor
+  Platforms* (2018)
+- **NIST SP 800-218**, *Secure Software Development Framework (SSDF) v1.1*
+  (2022)
+- **NIST SP 800-207**, *Zero Trust Architecture* (2020)
+- **OWASP Top 10 for LLM Applications** (2025 edition)
 
-Both are works of the United States federal government and are therefore in
-the **public domain** (17 U.S.C. §105). No license terms apply; redistribution
-is unrestricted. Source URLs and retrieval date are recorded in
+The five NIST publications are works of the United States federal government
+and are therefore in the **public domain** (17 U.S.C. §105); no license terms
+apply and redistribution is unrestricted. The OWASP document is distributed
+under **Creative Commons BY-SA 4.0** and is included verbatim with attribution
+to the OWASP GenAI Security Project (© OWASP Foundation); the document itself
+remains under CC BY-SA 4.0. Source URLs and retrieval date are recorded in
 `docs-pub/reference/README.md`.
 
-The **CIS Docker Benchmark** is deliberately *not* vendored: it is distributed
-under a CIS license that prohibits redistribution, and is referenced by link
-only.
+The following are deliberately *not* vendored and are referenced by link only:
+
+- **CIS Benchmarks** (Docker and Linux distribution benchmarks) — the CIS
+  license prohibits redistribution
+- **DISA STIGs** — public DoD documents, but distributed as XCCDF benchmark
+  XML rather than readable publications
+- **MITRE ATLAS** — a living knowledge-base website, not a distributable
+  document
+- **ISO/IEC 29147 and 30111** — commercial ISO standards

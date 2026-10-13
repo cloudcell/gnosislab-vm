@@ -7,13 +7,17 @@ informed by published industry standards and practice, including:
 
 - **NIST SP 800-190** — application container security
 - **NIST SP 800-53 Rev. 5** — least privilege (AC-6), audit (AU-6)
+- **NIST SP 800-125A** — server-based hypervisor platform security
+- **NIST SP 800-218 (SSDF)** — supply-chain and build provenance
+- **NIST SP 800-207** — zero-trust architecture (the egress-fence model)
+- **OWASP Top 10 for LLM Applications** and **MITRE ATLAS** —
+  adversarial AI-agent threat surfaces
 - **CIS Docker Benchmark** — container hardening conventions
 - production agent-sandbox practice (microVM platforms, code-execution
   sandboxes)
 
-Local copies of the NIST publications are vendored in
-[`docs-pub/reference/`](docs-pub/reference/README.md) (public-domain US
-government works). A control-by-control mapping of this project's
+Local copies of the NIST publications and the OWASP document are vendored in
+[`docs-pub/reference/`](docs-pub/reference/README.md). A control-by-control mapping of this project's
 implementation against those baselines — including the deliberate gaps and
 their escalation paths — is recorded in
 [`deploy/SECURITY-COMPLIANCE-NOTE.md`](deploy/SECURITY-COMPLIANCE-NOTE.md).

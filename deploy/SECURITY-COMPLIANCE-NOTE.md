@@ -8,11 +8,18 @@ conventions it meets or exceeds, which it deliberately does not, and
 what the documented escalation path is for each gap.
 
 Reference baselines: **NIST SP 800-190** (container security),
-**CIS Docker Benchmark**, **NIST SP 800-53** (AC-6 least privilege,
-AU-6 audit) — the NIST publications are vendored locally under
-[`docs-pub/reference/`](../docs-pub/reference/README.md) — and the
-practices of production agent-sandbox systems
-(microVM platforms, code-execution sandboxes, sandbox runtimes).
+**NIST SP 800-53** (AC-6 least privilege, AU-6 audit),
+**NIST SP 800-125A** (hypervisor-platform security),
+**NIST SP 800-218 / SSDF** (supply-chain and build provenance),
+**NIST SP 800-207** (zero trust — the egress-fence model),
+**OWASP Top 10 for LLM Applications** and **MITRE ATLAS**
+(adversarial AI-agent threats), **CIS Docker Benchmark**, and the
+practices of production agent-sandbox systems (microVM platforms,
+code-execution sandboxes, sandbox runtimes). The NIST publications
+and the OWASP document are vendored locally under
+[`docs-pub/reference/`](../docs-pub/reference/README.md); CIS, DISA
+STIGs, MITRE ATLAS, and the ISO vulnerability-handling standards are
+referenced by link only — see that README for why.
 
 ## 1. Controls that meet or exceed the standard
 
