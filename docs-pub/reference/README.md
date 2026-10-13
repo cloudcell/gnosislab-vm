@@ -8,12 +8,12 @@ without hunting down external links.
 
 | Document | Source | License / status | Retrieved |
 |---|---|---|---|
-| `NIST.SP.800-190.pdf` — Application Container Security Guide | <https://nvlpubs.nist.gov/nistpubs/SpecialPublications/NIST.SP.800-190.pdf> | Public domain (US federal government work, 17 U.S.C. §105) | 2025-10 |
-| `NIST.SP.800-53r5.pdf` — Security and Privacy Controls for Information Systems and Organizations, Rev. 5 | <https://nvlpubs.nist.gov/nistpubs/SpecialPublications/NIST.SP.800-53r5.pdf> | Public domain (17 U.S.C. §105) | 2025-10 |
-| `NIST.SP.800-125A.pdf` — Security Recommendations for Server-based Hypervisor Platforms | <https://nvlpubs.nist.gov/nistpubs/SpecialPublications/NIST.SP.800-125A.pdf> | Public domain (17 U.S.C. §105) | 2025-10 |
-| `NIST.SP.800-218.pdf` — Secure Software Development Framework (SSDF) v1.1 | <https://nvlpubs.nist.gov/nistpubs/SpecialPublications/NIST.SP.800-218.pdf> | Public domain (17 U.S.C. §105) | 2025-10 |
-| `NIST.SP.800-207.pdf` — Zero Trust Architecture | <https://nvlpubs.nist.gov/nistpubs/SpecialPublications/NIST.SP.800-207.pdf> | Public domain (17 U.S.C. §105) | 2025-10 |
-| `OWASP-Top-10-for-LLMs-v2025.pdf` — OWASP Top 10 for LLM Applications (2025) | <https://genai.owasp.org/llm-top-10/> | CC BY-SA 4.0 — redistributed verbatim with attribution to OWASP GenAI Security Project | 2025-10 |
+| [`NIST.SP.800-190.pdf`](NIST.SP.800-190.pdf) — Application Container Security Guide | <https://nvlpubs.nist.gov/nistpubs/SpecialPublications/NIST.SP.800-190.pdf> | Public domain (US federal government work, 17 U.S.C. §105) | 2025-10 |
+| [`NIST.SP.800-53r5.pdf`](NIST.SP.800-53r5.pdf) — Security and Privacy Controls for Information Systems and Organizations, Rev. 5 | <https://nvlpubs.nist.gov/nistpubs/SpecialPublications/NIST.SP.800-53r5.pdf> | Public domain (17 U.S.C. §105) | 2025-10 |
+| [`NIST.SP.800-125A.pdf`](NIST.SP.800-125A.pdf) — Security Recommendations for Server-based Hypervisor Platforms | <https://nvlpubs.nist.gov/nistpubs/SpecialPublications/NIST.SP.800-125A.pdf> | Public domain (17 U.S.C. §105) | 2025-10 |
+| [`NIST.SP.800-218.pdf`](NIST.SP.800-218.pdf) — Secure Software Development Framework (SSDF) v1.1 | <https://nvlpubs.nist.gov/nistpubs/SpecialPublications/NIST.SP.800-218.pdf> | Public domain (17 U.S.C. §105) | 2025-10 |
+| [`NIST.SP.800-207.pdf`](NIST.SP.800-207.pdf) — Zero Trust Architecture | <https://nvlpubs.nist.gov/nistpubs/SpecialPublications/NIST.SP.800-207.pdf> | Public domain (17 U.S.C. §105) | 2025-10 |
+| [`OWASP-Top-10-for-LLMs-v2025.pdf`](OWASP-Top-10-for-LLMs-v2025.pdf) — OWASP Top 10 for LLM Applications (2025) | <https://genai.owasp.org/llm-top-10/> | CC BY-SA 4.0 — redistributed verbatim with attribution to OWASP GenAI Security Project | 2025-10 |
 
 ## Referenced but not vendored
 
