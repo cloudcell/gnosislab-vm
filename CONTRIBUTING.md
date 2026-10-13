@@ -1,155 +1,33 @@
-# Contributing to ML-LabLoop
+# Contributing to GnosisLab-VM
 
-Thank you for your interest in contributing to ML-LabLoop.
+Thanks for considering contributions to **GnosisLab-VM**, the optional KVM/libvirt isolation environment for [GnosisLab](https://github.com/cloudcell/gnosislab). The project is alpha software. Prefer focused changes with reproducible tests and documented security effects.
 
-ML-LabLoop is an early-stage project that builds a secure, reproducible,
-per-user ML experimentation lab as a KVM/libvirt VM template. The project is
-intended to be useful, understandable, and technically reliable before it
-becomes large. Small, well-scoped contributions are preferred.
+Before opening a PR, check [issues](https://github.com/cloudcell/gnosislab-vm/issues), separate refactoring from behavior changes, and update documentation when modifying user-visible behavior.
 
-## Project Status
-
-ML-LabLoop is alpha software. Template layouts, zone boundaries, container
-definitions, and security controls may change before a stable release.
-
-Please do not assume that a current internal implementation detail is permanent.
-
-## Before You Contribute
-
-Before opening a pull request, please:
-
-1. Check existing issues and pull requests.
-2. Keep the change focused.
-3. Re-run the functional and security batteries where the change touches
-   guest configuration.
-4. Update documentation if the behavior visible to users changes.
-5. Avoid mixing refactoring, formatting, and feature work in one pull request.
-
-If you are unsure whether a change fits the project direction, open an issue
-first.
-
-## Development Setup
-
-The build pipeline runs on a Linux host with KVM and libvirt:
+## Local setup
 
 ```bash
 git clone https://github.com/cloudcell/gnosislab-vm.git
 cd gnosislab-vm
-
-./00-build-lab-template.sh
-```
-
-The numbered scripts form the release workflow: build the template, prepare it
-for cloning, create per-user clones, and upload a release image.
-
-This repository is public — before committing, enable the tracked leak
-guard so private paths, tokens, keys, and escaping symlinks never reach
-GitHub:
-
-```bash
 git config --local core.hooksPath .githooks
 ```
 
-The hook scans staged files on every commit. Run `.githooks/pre-commit --all`
-for a whole-tree audit, and `--strict` to also fail on warnings.
+The tracked pre-commit hook checks common private-information leaks. It is a guardrail, not a substitute for careful review. Run `.githooks/pre-commit --all` before submitting; use `--strict` for stricter checks.
 
-## Running Tests
+## Validation
 
-Guest-side verification is provided by the batteries under `deploy/`:
+For shell changes, run `bash -n` on changed Bash scripts and `shellcheck` where available. The GitHub `repository-hygiene` workflow checks syntax and project metadata, but **does not prove runtime security**. Changes involving networking, privileged wrappers, mounts, Podman, image sealing, or VM creation require the applicable in-guest functional and security batteries, plus manual threat-model review. Record the environment, test commands, and actual results in the PR.
 
-```text
-deploy/functional-battery.sh
-deploy/security-battery.sh
-```
+Never run untrusted guest code on your primary host to test it. Do not attach real secrets or sensitive datasets to issues, PRs, CI artifacts, or test images.
 
-Both batteries are hard gates in `create-lab-template`: a template is not
-frozen unless each finishes with zero failures. Shell scripts should pass
-`bash -n` and, where practical, `shellcheck`.
+## Compatibility
 
-## Code Style
+Use **GnosisLab-VM** for this repository, **GnosisLab** for the scientific runtime, and **LabLoop** only when documenting historical identity or existing compatible command names/paths. Do not rename `LABLOOP_*`, `labloop-*`, libvirt domain conventions, or image buckets as a documentation-only change: migrations need explicit compatibility decisions and tests.
 
-Prefer code that is:
+## Licensing and contributions
 
-- explicit rather than clever
-- deterministic where possible
-- easy to verify with the batteries
-- careful about security boundaries
-- conservative about dependencies
+The project uses [Apache-2.0](LICENSE). Follow the contribution sign-off and possible CLA procedures in [legal/CONTRIBUTOR-SIGNOFFS.md](legal/CONTRIBUTOR-SIGNOFFS.md) and [legal/CONTRIBUTOR-CLA.md](legal/CONTRIBUTOR-CLA.md). See [legal/TRADEMARKS.md](legal/TRADEMARKS.md) for marks.
 
-Avoid broad architectural rewrites unless they have been discussed first.
+## Responsible disclosure
 
-Security-sensitive changes — anything touching the hostile zone, the sudoers
-rules, the nftables fence, or the build wrappers — must not weaken isolation.
-When in doubt, the strictest interpretation wins.
-
-## Commit Messages
-
-Use clear commit messages. A good commit message explains what changed and
-why.
-
-Examples:
-
-```text
-Allow DNS egress for the hostile user under slirp4netns
-Fix false-positive gateway probe in the security battery
-Document the four package installation lanes
-```
-
-## Contributor Sign-off and CLA
-
-Contributions require contributor sign-off.
-
-Small individual contributions may use the lightweight contributor sign-off
-process described in:
-
-```text
-legal/CONTRIBUTOR-SIGNOFFS.md
-```
-
-For substantial contributions, corporate contributions, or contributions where
-Cloudcell Limited requests it, a signed contributor license agreement may be
-required:
-
-```text
-legal/CONTRIBUTOR-CLA.md
-```
-
-By contributing, you represent that you have the right to submit the
-contribution and that your contribution does not knowingly violate third-party
-rights.
-
-## License of Contributions
-
-Unless otherwise agreed in writing, contributions to ML-LabLoop are submitted
-under the same license terms that apply to the project, together with the
-contributor grant described in the contributor sign-off or CLA documents.
-
-ML-LabLoop is distributed under the Apache License 2.0 unless otherwise stated.
-
-## Trademarks
-
-The software license does not grant trademark rights.
-
-Use of the `LabLoop` name and related marks is governed separately by:
-
-```text
-legal/TRADEMARKS.md
-```
-
-## Security Issues
-
-Please do not report security vulnerabilities through public GitHub issues.
-
-See:
-
-```text
-SECURITY.md
-```
-
-## Maintainer Discretion
-
-Maintainers may decline contributions that are out of scope, too large to
-review safely, insufficiently tested, inconsistent with project direction, or
-likely to create long-term maintenance burden.
-
-This is especially important while ML-LabLoop is still alpha software.
+Security vulnerabilities must **not** be reported through public issues. Follow [SECURITY.md](SECURITY.md).

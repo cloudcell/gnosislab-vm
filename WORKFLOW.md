@@ -1,103 +1,79 @@
-# ml-labloop
+# GnosisLab-VM workflow
 
-Isolation harness for the ml-scientist lab loops: one KVM VM per user,
-and inside it three zones — driver (VSCodium/Cline), trusted (the five
-ml-* MCP servers, one Podman container), hostile (arbitrary experiment
-code, one container, no route back).
+This repository packages an optional **KVM/libvirt isolated environment** for [GnosisLab](https://github.com/cloudcell/gnosislab). GnosisLab itself supplies scientific-process MCP services; this repository provisions and operates VM guests in which agents and potentially untrusted experiment code run in separately controlled zones.
 
-## Using it
+## Host workflow
 
-The numbered scripts are the workflow — run them in order on the host:
-
-```text
-00-build-lab-template.sh            Mint ISO -> unattended install -> template
-01-prepare-template-for-cloning.sh  seal: password lock (publish) + sysprep + snapshot
-02-create-vm-from-template.sh <u>   clone -> lab-vm-<u>, readiness + security battery
-10-upload-template-to-hf.sh         [y/N] confirm -> seal -> compress -> HF bucket
-30-ensure-lab-tools.sh <vm>|all     deploy current lab tooling into a running VM
-80-ingest-lab-data.sh <vm> <src>    push data in -> /srv/lab/incoming/<batch-UTCts>
-90-extract-lab-data.sh <vm> [dest]  pull staged lab data out -> <vm>-extraction-<ts>
-```
-
-Defaults: `00` creates `lab-template-<UTC-ts>`; `01`/`02`/`10` pick the
-newest dated template automatically (override with an argument or
-`LABLOOP_TEMPLATE=`).
-
-> **ISO location matters.** `qemu:///system` runs guests as the
-> `libvirt-qemu` account, which must *traverse* every directory above
-> the ISO — a checkout under `$HOME` (mode 0700/0750) can't be read.
-> `create-lab-template` detects this and hardlinks the ISO into
-> `/var/lib/libvirt/images/labloop-iso/` automatically (copy fallback
-> across filesystems) — no permissions on your home are ever changed.
-
-Day to day:
+Requires a Linux KVM host, working `qemu:///system`, libvirt privileges, sufficient memory and disk, and sudo access. Refer to [README.md](README.md) for prerequisites.
 
 ```bash
-./02-create-vm-from-template.sh alice     # new user VM -> lab-vm-alice
+./00-build-lab-template.sh
+./01-prepare-template-for-cloning.sh
+./02-create-vm-from-template.sh researcher
+virsh -c qemu:///system start lab-vm-researcher
 ```
 
-Default login inside every VM: user `lab`, password `lab` (forced to
-change at first login). The clone boots, runs `check-lab-ready.sh` +
-the security battery inside (expect `22 PASS, 0 FAIL` /
-`18 PASS, 0 WARN, 0 FAIL`), and writes the current password to
-`/var/lib/libvirt/images/lab-vm-alice.otp` (mode 400) — `lab` for
-normal templates, a generated one for publish-locked images.
-(`exp` is a locked service account, not a login.)
+The numbered scripts automate the sequence and run readiness checks. Local builds and downloaded images use **different credential-handling procedures**; consult script output and [SECURITY.md](SECURITY.md). Never publish local templates with default credentials. A built template must be shut off and scrubbed before it is cloned.
 
-First run inside a new VM: paste `deploy/GENESIS-RESEARCH-PROMPT.md`
-to the driver agent — it walks one complete scientific cycle
-(programme → falsifiable hypothesis → `labloop-exec` trial →
-observation → belief → evidence-backed verdict → anamnesis claim →
-staged export) and exercises every MCP service and zone rule before
-real work.
+## Build cache and package versions
 
-> **The first boot of a fresh clone is slow — a few minutes, not
-> seconds.** Sysprep scrubbed its identity (machine-id, SSH host keys,
-> network config), which the guest regenerates on first power-on; the
-> rootless Podman quadlets also start for the first time (both zone
-> containers + lingering user services). The QEMU guest agent can take
-> ~60–90 s to answer, and the readiness check only passes once the
-> zone containers are up. A black/login-less screen during that window
-> is normal — subsequent boots are fast.
-
-Template releases:
+`selfbuild/prefetch-cache.sh` prefetches required artifacts and the pinned `gnosislab` Python package. Use `--verify` to inspect cache completeness. For offline building, populate and verify the cache first, then run:
 
 ```bash
-./00-build-lab-template.sh                # rebuild when the image changes
-./10-upload-template-to-hf.sh             # publish -> hf://buckets/... bucket
+LABLOOP_OFFLINE=1 ./00-build-lab-template.sh
 ```
 
-`10` asks `[y/N]` (default: no), locks `lab`+`exp` passwords inside the
-image before upload, and pushes `<name>-<UTC-ts>.qcow2` + `.sha256`.
-Recipients fetch it and run `20-import-lab-vm.sh`:
+The GnosisLab package version is pinned in `create-lab-template` and may be overridden via `GNOSISLAB_VER`. Reproduce results using an explicit commit, dependency versions, ISO source/checksum, and VM image digest. Upgrading packages or images changes the trusted baseline and merits a new verification run.
+
+## Distributing and importing images
 
 ```bash
-hf buckets cp hf://buckets/LabLoopCommunity/lab-trials/<file>.qcow2 .
-sha256sum -c <file>.qcow2.sha256
-20-import-lab-vm.sh <file>.qcow2 <name>
+./10-upload-template-to-hf.sh
+./11-release-template.sh
 ```
 
-Design and governance live in `docs/`:
+Release scripts currently default to historical Hugging Face buckets containing `LabLoop` in their names. Those are **legacy distribution identifiers**, not current branding. Verify account identity, destination and release integrity before publication. Sealing/sysprep, matching checksums, credential locking and no secrets in the disk image are release requirements.
 
-- `sa-standards/` — security documentation convention (the s-prefix)
-- `sb-architecture/sb-01-secure-encapsulation.md` — the zone design
-- `se-plans/` — execution plan + two-zone escalation variant
-- `si-reviews/` — review-gate verdicts
-- `sg-research/` — external/reference material
-- `a-standards` … `r-references` — symlinked from `../ml-scientist/docs/`
+For an externally obtained image, inspect the publisher and provenance, verify its digest, then import:
 
-Layout:
-
-```text
-containers/mcp/         trusted-zone image + 5-server entrypoint
-containers/experiment/  hostile-zone image
-deploy/labloop.sudoers  driver -> hostile exec channel (VM sudoers.d)
-deploy/labloop.nft      zone firewall (inside the VM)
-deploy/quadlets/        rootless systemd units, per user
-create-lab-user         template -> per-user VM clone (host side)
+```bash
+sha256sum -c image.qcow2.sha256
+./20-import-lab-vm.sh image.qcow2 researcher
 ```
 
-Build context note: `containers/mcp/Containerfile` expects a staged
-context containing `pkgs/wheels/` + `pkgs/gnosislab/` (the pinned
-`gnosislab` PyPI package's wheel closure + sdist config payload,
-staged by `selfbuild/prefetch-cache.sh`) — see its header comment.
+A checksum alone does not authenticate the publisher. Do not execute unverified VM images on sensitive hosts.
+
+## Keeping deployed guests current
+
+```bash
+./30-ensure-lab-tools.sh lab-vm-researcher
+```
+
+This updates selected deployment tooling; it is not a replacement for guest and host OS security updates, image rebuilding, or a fresh security review. Re-run the guest readiness test (`~/Desktop/check-lab-ready.sh`) after changes. Run guest security and functional batteries as part of release verification.
+
+## Data movement
+
+```bash
+./80-ingest-lab-data.sh lab-vm-researcher ./incoming/dataset.csv research-data
+# Within the guest, stage data using labloop-export as permitted by its policy.
+./90-extract-lab-data.sh lab-vm-researcher ./extracted
+```
+
+The guest agent is used for **host-initiated** movement; the experiment container should not receive host filesystem mounts. Exports are untrusted content: **do not unpack or execute them on the host automatically**. See [deploy/DATA-MOVEMENT-MANUAL.md](deploy/DATA-MOVEMENT-MANUAL.md).
+
+## Execution and isolation model
+
+- **Host:** KVM/QEMU/libvirt VM lifecycle, import, export and templates.
+- **Guest driver (`lab`):** local user interface and model clients.
+- **Guest trusted (`mcp`):** GnosisLab stateful MCP services, isolated from ordinary driver file access.
+- **Guest experiment (`exp`):** rootless Podman container for untrusted or generated code, with constrained ingress/egress and dedicated mounts.
+
+The guest's legacy `labloop-exec`, `labloop-build`, `labloop-export` and `labloop-fault` commands are still live interfaces. The word `labloop` in command, directory, service, environment-variable or distribution names does not mean this project retains that public brand. Renaming these identifiers is a **separate code and migration project** requiring tests.
+
+The security contract is [deploy/SECURITY-MANUAL.md](deploy/SECURITY-MANUAL.md). In particular, the guest admin password is **not** an isolation boundary from a human with guest administrative access. VM and container isolation reduce risk but do not eliminate it.
+
+## Related projects
+
+- [GnosisLab core](https://github.com/cloudcell/gnosislab)
+- [GnosisLab documentation](https://loop.cloudcell.workers.dev/docs)
+- [GnosisLab Python distribution](https://pypi.org/project/gnosislab/)

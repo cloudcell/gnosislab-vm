@@ -1,0 +1,42 @@
+name: Repository hygiene
+on:
+  pull_request:
+  push:
+    branches: [master, main]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  repository-hygiene:
+    name: repository-hygiene
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Validate Bash scripts (syntax only)
+        shell: bash
+        run: |
+          set -euo pipefail
+          while IFS= read -r -d '' f; do
+            if head -c 128 "$f" | grep -q '^#!.*\(ba\)\?sh'; then
+              bash -n "$f"
+            fi
+          done < <(find . -type f -name '*.sh' -print0)
+          bash -n create-lab-template create-lab-user .githooks/pre-commit
+      - name: Verify required project files
+        shell: bash
+        run: |
+          set -euo pipefail
+          for path in README.md LICENSE SECURITY.md CONTRIBUTING.md CITATION.cff CHANGELOG.md WORKFLOW.md; do
+            test -s "$path" || { echo "Missing or empty $path" >&2; exit 1; }
+          done
+      - name: Detect obsolete public branding in main entry points
+        shell: bash
+        run: |
+          set -euo pipefail
+          if grep -En '^# (LabLoop|ML-LabLoop)|cloudcell/labloop' README.md CONTRIBUTING.md WORKFLOW.md; then
+            echo 'Obsolete primary branding/link detected' >&2
+            exit 1
+          fi

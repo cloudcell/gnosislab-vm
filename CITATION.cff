@@ -1,29 +1,29 @@
 cff-version: 1.2.0
-title: "GnosisLab-VM — isolated KVM lab for agentic ML experimentation"
-message: "If you use this software, please cite it as below."
+message: "If you use GnosisLab-VM, please cite this software."
 type: software
+title: "GnosisLab-VM: virtualized, isolated environment for reproducible scientific research"
 authors:
   - family-names: Bikeyev
     given-names: Alexander
     affiliation: Cloudcell Limited
 license: Apache-2.0
+repository-code: "https://github.com/cloudcell/gnosislab-vm"
+url: "https://github.com/cloudcell/gnosislab-vm"
 version: "0.0.2"
 date-released: 2026-10-14
-repository-code: "https://github.com/cloudcell/gnosislab-vm"
-repository-artifact: "https://huggingface.co/buckets/cloudcell/LabLoop"
 abstract: >-
-  GnosisLab-VM is a secure, reproducible, per-user experimentation lab for
-  agentic ML work: an isolated KVM/libvirt VM containing VSCodium with
-  AI coding agents, a trusted zone of scientific-state MCP services
-  (agora, arete, zetesis, episteme, anamnesis), and a hostile zone for
-  controlled execution of generated or untrusted experiment code —
-  with rootless Podman, pull-only extraction and push-only ingest
-  channels over the QEMU guest agent, and a frozen, clonable template
-  built unattended from a Linux Mint ISO.
+  GnosisLab-VM provides a KVM/libvirt virtualized deployment environment
+  for GnosisLab, with a guest agent interface, isolated scientific MCP
+  services, separate execution of potentially untrusted experiment code,
+  controlled data movement, and reproducible template build and import
+  workflows. GnosisLab scientific-process services are developed in the
+  companion gnosislab repository.
 keywords:
-  - machine-learning
-  - sandboxing
-  - reproducibility
+  - gnosislab
+  - scientific-method
+  - virtualization
   - KVM
-  - MCP
-  - experiment-management
+  - libvirt
+  - reproducibility
+  - sandboxing
+  - model-context-protocol
