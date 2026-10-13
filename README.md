@@ -7,6 +7,7 @@
 
 **Build a sealed KVM lab template once — clone a trusted sandbox for every experiment.**
 
+[![DOI](https://zenodo.org/badge/23351184.svg)](https://doi.org/10.5281/zenodo.23351184)
 [![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 [![Hygiene](https://github.com/cloudcell/gnosislab-vm/actions/workflows/repository-hygiene.yml/badge.svg)](https://github.com/cloudcell/gnosislab-vm/actions/workflows/repository-hygiene.yml)
 [![GnosisLab](https://img.shields.io/badge/scientific_runtime-GnosisLab-555)](https://github.com/cloudcell/gnosislab)
