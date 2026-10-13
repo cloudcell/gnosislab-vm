@@ -1,0 +1,19 @@
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+env/
+venv/
+.venv/
+dist/
+incoming/
+!incoming/.gitkeep
+
+# private docs tree — matches both a docs/ dir and a docs symlink
+docs
+
+# machine-local symlink to sibling repo docs — never commit
+ml-labloop-docs
+

@@ -1,0 +1,81 @@
+# Quadlet — trusted zone. Install for the `mcp` SERVICE ACCOUNT:
+#   ~mcp/.config/containers/systemd/lab-cnt-mcp.container
+#   (enable linger for mcp) systemctl --user daemon-reload && start
+# Requires: lab-net-mcp exists in mcp's podman, lab-img-mcp built as mcp.
+# Running under mcp — not lab — is the isolation: the driver (lab, and
+# therefore the agent) cannot read /srv/lab/mcp-state, exec into the
+# container, or kill the services. Scientific state is write-through-MCP.
+[Unit]
+Description=labloop trusted zone - ml-* MCP servers
+
+[Container]
+Image=lab-img-mcp
+ContainerName=lab-cnt-mcp
+# pinned IP: the security battery probes 172.31.0.2 from the hostile
+# zone — lab's podman can no longer inspect this container to resolve it
+Network=lab-net-mcp:ip=172.31.0.2
+# no UserNS line: default rootless mapping keeps container root = host
+# `mcp`, so the mcp-owned /state volume stays writable (auto would map
+# it to an unrelated subuid and break state.db writes).
+RunInit=true
+DropCapability=all
+# SYS_ADMIN: the episteme executor sandboxes trials with bwrap, which
+# creates a nested user+mount namespace and writes its uid_map. All
+# confined to lab's rootless userns — the VM is the real boundary.
+# The hostile zone deliberately does NOT get this.
+AddCapability=SYS_ADMIN
+# Default seccomp gates unshare/mount/etc. on CAP_SYS_ADMIN; this
+# profile allows the nested-namespace syscalls unconditionally.
+SeccompProfile=/srv/lab/workspace/ml-labloop/deploy/seccomp-labloop.json
+NoNewPrivileges=true
+# Ports are rendered from the image's own ports.env at install time
+# (create-lab-template / 30-ensure expand @MCP_PORTS_PUBLISH@ — one
+# 127.0.0.1-bound PublishPort per *_PORT var). Never hardcode a port
+# here; the servers read the same file inside the image.
+@MCP_PORTS_PUBLISH@
+# episteme ingest surface (28082): token-gated writes to the state
+# store. The token lives in an env file OUTSIDE the repo — generated
+# per-deployment, never committed (see create-lab-template).
+EnvironmentFile=/srv/lab/mcp-state/ingest.env
+Volume=/srv/lab/mcp-state:/state
+Volume=/srv/lab/exchange:/exchange:ro
+# ingest channel, read-only: trials inside the executor's bwrap
+# sandbox see it through the recursive --ro-bind / — same mechanism
+# by which /exchange and /state are already visible. The hostile zone
+# holds the same RO view; this grants the *more* trusted executor no
+# capability a weaker zone lacks. Data plane, not a new crossing.
+Volume=/srv/lab/incoming:/incoming:ro
+# Trial interpreter volume: episteme's executor defaults to
+# sys.executable (the slim server venv — no numpy). /srv/lab/trial-env
+# is a populated uv venv (numpy/pandas/scipy/sklearn/matplotlib/
+# reportlab) mounted over /opt/trial-env so it survives container
+# recreates — the image layer would not (quadlet = fresh podman run).
+# entrypoint.sh exports ML_EPISTEME_EXECUTOR_PYTHON only when the env
+# exists, so an unpopulated volume degrades gracefully to the slim
+# interpreter instead of failing every spawn.
+Volume=/srv/lab/trial-env:/opt/trial-env
+# entrypoint from the repo payload, not the baked image copy — lets
+# supervisor fixes land without an image rebuild
+Volume=/srv/lab/workspace/ml-labloop/containers/mcp/entrypoint.sh:/usr/local/bin/labloop-mcp:ro
+# Liveness visibility (rc-11): marks the container unhealthy in
+# `podman ps` when episteme's loop stops answering. Quadlets do NOT
+# restart on unhealthy — the labloop-mcp-watchdog timer is the
+# operative recovery; this is signal, not remedy. The port is read
+# from the image's own ports.env at probe time so a port move can't
+# desync the check. The /opt/*/ glob matches /opt/ml-scientist on
+# pre-gnosislab images and /opt/gnosislab on packaged ones — the probe
+# is vintage-agnostic.
+HealthCmd=/bin/sh -c '. /opt/*/ports.env; exec /usr/bin/curl -m 5 -sf http://127.0.0.1:${ML_EPISTEME_PORT}/health'
+HealthInterval=30s
+HealthRetries=3
+HealthStartPeriod=120s
+
+[Service]
+Restart=always
+# a stopped container exits 143 (SIGTERM) or 137 (SIGKILL after the
+# stop timeout); conmon propagates it as the unit's main-process
+# status — without this every stop marks the service failed.
+SuccessExitStatus=0 137 143
+
+[Install]
+WantedBy=default.target

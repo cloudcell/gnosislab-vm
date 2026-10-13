@@ -1,0 +1,1145 @@
+#!/usr/bin/env bash
+# create-lab-template — build the labloop golden VM image from scratch.
+#
+# Executable form of docs/sc-handbook/sc-01-labloop-setup-protocol.md.
+# Produces a shut-off, snapshotted template that create-lab-user clones.
+#
+#   Usage:   ./create-lab-template [template-name]
+#   Env:     LABLOOP_ISO    path to a Linux Mint ISO   (required if the
+#                                                         domain does not exist)
+#            GNOSISLAB_VER  gnosislab package pin for the trusted zone
+#                           (default 0.1.42 — prefetch-cache.sh evals this line)
+#            LABLOOP_PUBLISH=1  lock lab+exp passwords at freeze —
+#                               mandatory before distributing the image
+#
+# One part cannot be automated without preseeding (Mint's live
+# installer): the OS install itself. The script drives virt-install,
+# then WAITS while you click through the installer and install
+# qemu-guest-agent — everything after that is unattended, driven over
+# the qemu guest-agent virtio channel (no ssh, no host TCP listeners).
+#
+# Ends with the guest shut down, XML hardened (clipboard off, virtio
+# video at the configured native resolution), and an snp-vN snapshot.
+#   sudo virt-sysprep -d <name>     # scrub identity
+#   ./create-lab-user <user>        # per-user clone
+set -euo pipefail
+
+VM="${1:-lab-template-v1}"
+case "$VM" in
+    -h|--help) sed -n '2,24p' "$0"; exit 0 ;;
+    -*|*[!a-zA-Z0-9_.-]*) echo "create-lab-template: bad domain name '$VM'" >&2; exit 1 ;;
+esac
+REPO="$(cd "$(dirname "$0")" && pwd)"
+# gnosislab package pin — single source of truth for the trusted-zone
+# version; prefetch-cache.sh evals this line (bump here → new fetch)
+GNOSISLAB_VER="${GNOSISLAB_VER:-0.1.42}"
+ISO="${LABLOOP_ISO:-}"
+VIRSH="virsh -c qemu:///system"
+WORK="$(mktemp -d)"
+trap 'report_phases; rm -rf "$WORK"; [ -z "${CACHE_HTTP_PID:-}" ] || kill "$CACHE_HTTP_PID" 2>/dev/null; [ "${CACHE_RULE_ADDED:-0}" = 1 ] && sudo -n ufw delete allow in on virbr0 to 192.168.122.1 port 8777 proto tcp comment labloop-cache >/dev/null 2>&1; true' EXIT
+
+die()  { echo "create-lab-template: $*" >&2; exit 1; }
+# phase timing — each note() call closes the previous phase; the EXIT
+# trap prints the breakdown + total elapsed
+T0=$SECONDS; _pt=$T0
+PHASE_NAMES=() PHASE_SECS=()
+note() {
+    local now=$SECONDS
+    ((${#PHASE_NAMES[@]})) && PHASE_SECS+=("$((now - _pt))")
+    PHASE_NAMES+=("$*"); _pt=$now
+    echo; echo "==> $*"
+}
+_fmt_dur() { printf '%dm%02ds' $(($1/60)) $(($1%60)); }
+report_phases() {
+    local now=$SECONDS i
+    ((${#PHASE_NAMES[@]})) || return 0
+    PHASE_SECS+=("$((now - _pt))")
+    echo; echo "==> phases:"
+    for i in "${!PHASE_NAMES[@]}"; do
+        printf '    %-56s %7s\n' "${PHASE_NAMES[$i]}" "$(_fmt_dur "${PHASE_SECS[$i]}")"
+    done
+    printf '    %-56s %7s\n' TOTAL "$(_fmt_dur $((now - T0)))"
+}
+
+# VM sizing — labloop.conf (repo root); same-named env vars win.
+# vcpus are clamped to 75% of host cores: a lab VM must never be
+# sized to starve the host it runs on.
+if [ -f "$REPO/labloop.conf" ]; then . "$REPO/labloop.conf"; fi
+VCPUS="${LABLOOP_VCPUS:-16}"
+MEM_MIB="${LABLOOP_MEMORY_MIB:-16384}"
+RES_X="${LABLOOP_RES_X:-2560}"
+RES_Y="${LABLOOP_RES_Y:-1440}"
+REFRESH="${LABLOOP_REFRESH:-75}"
+# refresh must be a number in [30,75] — 59.94-style decimals allowed.
+# Out of range the EDID/modeline injection would produce nonsense.
+if ! awk -v r="$REFRESH" 'BEGIN{
+    exit !(r ~ /^[0-9]+(\.[0-9]+)?$/ && r+0 >= 30 && r+0 <= 75)}'; then
+    die "LABLOOP_REFRESH=$REFRESH invalid (need 30-75 Hz, decimals ok)"
+fi
+host_cores="$(nproc)"
+vcpu_cap=$(( host_cores * 3 / 4 )); [ "$vcpu_cap" -lt 1 ] && vcpu_cap=1
+if [ "$VCPUS" -gt "$vcpu_cap" ]; then
+    note "vcpus clamped: $VCPUS -> $vcpu_cap (75% of $host_cores host cores)"
+    VCPUS=$vcpu_cap
+fi
+# guest RAM vs host MemAvailable: QEMU is the kernel's favourite OOM
+# victim — a guest whose nominal size doesn't fit available host memory
+# gets killed mid-install and leaves a partitioned-but-empty disk that
+# boots to the UEFI shell. Refuse early; LABLOOP_MEM_OVERCOMMIT=1
+# overrides for hosts with serious swap.
+mem_avail_mib=$(awk '/^MemAvailable:/ {print int($2/1024)}' /proc/meminfo)
+if [ "${LABLOOP_MEM_OVERCOMMIT:-0}" != "1" ] \
+    && [ "$mem_avail_mib" -lt "$MEM_MIB" ]; then
+    die "guest needs ${MEM_MIB}MiB but host MemAvailable is ${mem_avail_mib}MiB —
+  the OOM killer will eat qemu mid-install.
+  Free memory, add swap, or rerun with a smaller LABLOOP_MEMORY_MIB
+  (or LABLOOP_MEM_OVERCOMMIT=1 if you really mean it)."
+fi
+# hostile-zone ceiling — derived: ~5/8 of guest vcpus, ~3/4 of guest
+# RAM. The driver zone + desktop always keep headroom under a
+# hostile-zone CPU/memory storm (observed: 8vcpu VM, exp at --cpus 6
+# + --memory 16g, thread storm froze the whole guest).
+EXP_CPUS=$(( VCPUS * 5 / 8 )); [ "$EXP_CPUS" -lt 1 ] && EXP_CPUS=1
+EXP_MEM_MIB=$(( MEM_MIB * 3 / 4 ))
+
+# ------------------------------------------------------------------
+# Phase 0 — preflight
+# ------------------------------------------------------------------
+id -nG | grep -qw libvirt || exec sg libvirt -c "$0 $*"
+$VIRSH list >/dev/null 2>&1 || die "cannot reach qemu:///system"
+[ -e /dev/kvm ] || die "/dev/kvm missing (vboxdrv holding SVM? see protocol)"
+command -v python3 >/dev/null || die "python3 required on host"
+
+# ---- artifact cache (warmed by 00 -> selfbuild/prefetch-cache.sh) ----
+# Every consume path below prefers the cache endpoint when its server
+# is up and falls back to today's network path when it isn't — the
+# cache is additive, never required for an online build. In
+# LABLOOP_OFFLINE=1 it IS required: verify hard-fails on gaps and a
+# dead endpoint means the guest cannot fetch at all.
+CACHE_ROOT="${XDG_CACHE_HOME:-$HOME/.cache}/labloop"
+CACHE_URL="${LABLOOP_CACHE_URL:-http://192.168.122.1:8777}"
+CACHE_HTTP_PID=""
+# "up" must mean OUR cache: an answer alone is not enough — a stale or
+# foreign http.server on :8777 answers the probe fine, then can die
+# mid-provisioning and leave guest curls hung for minutes. Compare the
+# served MANIFEST byte-for-byte with the local one.
+cache_serving() {
+    [ -f "$CACHE_ROOT/MANIFEST" ] \
+        && curl -fs -m 3 "$CACHE_URL/MANIFEST" 2>/dev/null \
+           | cmp -s - "$CACHE_ROOT/MANIFEST"
+}
+CACHE_UP=0
+if ! cache_serving && [ -f "$CACHE_ROOT/MANIFEST" ]; then
+    # down, or a foreign responder on the port. When we run under 00 its
+    # server is already up; standalone (or after a mid-run death) we
+    # bring up our own — killed by the EXIT trap above. A bare TCP
+    # connect tells "listening but not ours" from "nothing there" —
+    # independent of whether the foreign server has a /MANIFEST to 404.
+    if (exec 3<>"/dev/tcp/192.168.122.1/8777") 2>/dev/null; then
+        die "port 8777 is in use but does not serve the labloop cache — kill the foreign listener and retry"
+    fi
+    python3 -m http.server 8777 --bind 192.168.122.1 -d "$CACHE_ROOT" \
+        >/dev/null 2>&1 &
+    CACHE_HTTP_PID=$!
+    sleep 0.5
+    cache_serving || die "cache endpoint did not come up on $CACHE_URL"
+    note "cache endpoint started: $CACHE_URL (pid $CACHE_HTTP_PID)"
+fi
+cache_serving && CACHE_UP=1
+# The endpoint answering US is not enough: ufw default-denies inbound
+# on virbr0, and libvirt opens INPUT holes only for its own services
+# (dnsmasq 53/67) — so a listening server is still unreachable from the
+# guest (connect TIMEOUT, not refused). This holds for our server AND
+# for a reused/orphaned one, so check ufw whenever CACHE_UP=1. Without
+# sudo we degrade to the plain network path; offline mode still dies
+# at the gate below.
+if [ "$CACHE_UP" = 1 ] && systemctl is-active --quiet ufw 2>/dev/null; then
+    if sudo ufw allow in on virbr0 to 192.168.122.1 port 8777 proto tcp \
+            comment 'labloop-cache' >/dev/null; then
+        CACHE_RULE_ADDED=1
+    else
+        echo "    warn: ufw is active and no sudo — guests cannot reach" >&2
+        echo "    the cache; falling back to the network path" >&2
+        [ -n "$CACHE_HTTP_PID" ] && kill "$CACHE_HTTP_PID" 2>/dev/null
+        CACHE_HTTP_PID=""; CACHE_UP=0
+    fi
+fi
+if [ "${LABLOOP_OFFLINE:-0}" = "1" ]; then
+    "$REPO/selfbuild/prefetch-cache.sh" --verify \
+        || die "offline build requested but the artifact cache is incomplete"
+    [ "$CACHE_UP" = 1 ] || die "offline build needs the cache endpoint \
+(start the build via ./00-build-lab-template.sh, or serve $CACHE_ROOT \
+on 192.168.122.1:8777 yourself)"
+fi
+# apt prelude: inject the flat cache source + refresh ONLY its lists
+# (a full update would reintroduce the mirror dependency). Harmless
+# when the endpoint is down — the install falls through to mirrors.
+APT_PRELUDE=""
+if [ "$CACHE_UP" = 1 ]; then
+    note "artifact cache: $CACHE_URL (prefetched artifacts in use)"
+    APT_PRELUDE="printf 'deb [trusted=yes] $CACHE_URL/apt ./\n' > /etc/apt/sources.list.d/labloop-cache.list && \
+apt-get update -o Dir::Etc::SourceList='sources.list.d/labloop-cache.list' \
+    -o Dir::Etc::SourceParts='-' -o APT::Get::List-Cleanup='0' -qq || true ; "
+fi
+
+# ------------------------------------------------------------------
+# qemu guest-agent driver (inlined; exec + chunked file push)
+# ------------------------------------------------------------------
+cat > "$WORK/qga.py" <<'PYEOF'
+import base64, json, subprocess, sys, time
+dom, mode, args = sys.argv[1], sys.argv[2], sys.argv[3:]
+def qga(payload):
+    r = subprocess.run(["virsh","-c","qemu:///system","qemu-agent-command",
+                        dom, json.dumps(payload)],
+                       capture_output=True, text=True, check=True)
+    return json.loads(r.stdout)["return"]
+if mode == "ping":
+    print("agent-ok"); sys.exit(0)
+if mode == "exec":
+    user = None
+    if args[:1] == ["--as"]:
+        user, args = args[1], args[2:]
+    cmd = " ".join(args)
+    # guest-exec-status only returns output AFTER exit — so redirect the
+    # command to a guest logfile and tail it via quick secondary execs
+    # for live progress. rc goes to a separate file: the wrapping shell
+    # always exits 0, so st.exitcode would lie. Files are per-USER —
+    # /tmp is sticky, so e.g. 'lab' cannot truncate root's log, which
+    # would silently run nothing and report the previous rc.
+    tag = user or "root"
+    log, rcf = "/tmp/qga-cmd-%s.log" % tag, "/tmp/qga-cmd-%s.rc" % tag
+    inner = ("rm -f %s; { %s ; } > %s 2>&1; echo $? > %s"
+             % (rcf, cmd, log, rcf))
+    path, argv = ("/bin/su", ["-", user, "-c", inner]) if user \
+                 else ("/bin/sh", ["-c", inner])
+    pid = qga({"execute":"guest-exec","arguments":
+               {"path":path,"arg":argv,"capture-output":True}})["pid"]
+    def quick(c):
+        p = qga({"execute":"guest-exec","arguments":
+                 {"path":"/bin/sh","arg":["-c",c],"capture-output":True}})["pid"]
+        for _ in range(50):
+            s = qga({"execute":"guest-exec-status","arguments":{"pid":p}})
+            if s.get("exited"):
+                return base64.b64decode(s.get("out-data","") or "")
+            time.sleep(0.2)
+        return b""
+    off = 0
+    for _ in range(1800):                       # up to ~60 min (image builds)
+        time.sleep(2)
+        st = qga({"execute":"guest-exec-status","arguments":{"pid":pid}})
+        try:
+            chunk = quick("tail -c +%d %s 2>/dev/null" % (off+1, log))
+            if chunk:
+                off += len(chunk)
+                sys.stdout.write(chunk.decode("utf-8","replace"))
+                sys.stdout.flush()
+        except Exception:
+            pass
+        if st.get("exited"):
+            rc = quick("cat %s 2>/dev/null" % rcf).strip()
+            sys.exit(int(rc) if rc.isdigit() else 1)
+    sys.exit("guest-exec timeout")
+if mode == "push":
+    local, remote = args
+    h = qga({"execute":"guest-file-open","arguments":{"path":remote,"mode":"w+"}})
+    try:
+        with open(local,"rb") as f:
+            while chunk := f.read(48*1024):
+                qga({"execute":"guest-file-write","arguments":
+                     {"handle":h,"buf-b64":base64.b64encode(chunk).decode()}})
+    finally:
+        qga({"execute":"guest-file-close","arguments":{"handle":h}})
+    print(f"pushed {local} -> {remote}")
+PYEOF
+
+qga()      { python3 "$WORK/qga.py" "$VM" exec "$@"; }
+qga_lab()  { python3 "$WORK/qga.py" "$VM" exec --as lab "$@"; }
+qga_push() { python3 "$WORK/qga.py" "$VM" push "$1" "$2"; }
+
+agent_ready() {
+    python3 "$WORK/qga.py" "$VM" ping >/dev/null 2>&1 || return 1
+    # The Mint live/installer session also runs qemu-guest-agent and
+    # answers pings — only the INSTALLED system has the 'lab' user.
+    qga "id lab >/dev/null 2>&1" 2>/dev/null
+}
+
+# ------------------------------------------------------------------
+# Phase 1 — create the domain (skipped if it already exists)
+# ------------------------------------------------------------------
+if $VIRSH dominfo "$VM" >/dev/null 2>&1; then
+    note "domain $VM exists — skipping virt-install"
+else
+    [ -n "$ISO" ] || die "LABLOOP_ISO=<mint.iso> required to create $VM"
+    # qemu:///system runs guests as libvirt-qemu — the ISO must be
+    # readable by THAT account: read on the file plus search on every
+    # ancestor dir. A $HOME ISO (home is typically 0700/0750) fails at
+    # monitor-connect with a cryptic blockdev EACCES; check traversal
+    # up front and spell out the fix.
+    qemu_user="$(getent passwd libvirt-qemu | cut -d: -f1)"
+    qemu_user="${qemu_user:-qemu}"
+    _perm_for() {  # $1=path $2=r|x — does qemu_user have it?
+        local mode owner group obit gbit otbit
+        read -r mode owner group < <(stat -c '%a %U %G' "$1") \
+            || return 1
+        if [ "$2" = x ]; then obit=64; gbit=8; otbit=1
+        else                 obit=256; gbit=32; otbit=4; fi
+        [ "$owner" = "$qemu_user" ] && \
+            [ $((8#$mode & obit)) -ne 0 ] && return 0
+        id "$qemu_user" 2>/dev/null | grep -qw "$group" && \
+            [ $((8#$mode & gbit)) -ne 0 ] && return 0
+        [ $((8#$mode & otbit)) -ne 0 ] && return 0
+        getfacl -p "$1" 2>/dev/null | \
+            grep -q "user:${qemu_user}:.*$2" && return 0
+        return 1
+    }
+    iso_readable() {
+        if sudo -n -u "$qemu_user" true 2>/dev/null; then
+            sudo -n -u "$qemu_user" test -r "$1"; return
+        fi
+        local p
+        p="$(readlink -f "$1")" || return 1
+        while [ "$p" != "/" ]; do
+            if [ -d "$p" ]; then _perm_for "$p" x || return 1
+            else                 _perm_for "$p" r || return 1; fi
+            p="$(dirname "$p")"
+        done
+    }
+    if ! iso_readable "$ISO"; then
+        # Stage a second dentry under libvirt's storage: a hardlink shares
+        # the inode (no copy) and QEMU only traverses the NEW path — a
+        # symlink would not help, the target's ancestors still gate access.
+        # install(1) fallback covers cross-filesystem homes (EXDEV).
+        staged="/var/lib/libvirt/images/labloop-iso/$(basename "$ISO")"
+        note "ISO not readable by '$qemu_user' — staging into libvirt storage"
+        if sudo mkdir -p "${staged%/*}" \
+            && { sudo ln -f "$ISO" "$staged" 2>/dev/null \
+                 || sudo install -m 0644 "$ISO" "$staged"; } \
+            && iso_readable "$staged"; then
+            ISO="$staged"
+            note "staged: $ISO"
+        else
+            die "ISO not readable by '$qemu_user' and auto-stage failed.
+
+  stage it yourself (no ACLs on your home needed):
+      sudo mkdir -p /var/lib/libvirt/images/labloop-iso
+      sudo cp \"$ISO\" /var/lib/libvirt/images/labloop-iso/
+      LABLOOP_ISO=/var/lib/libvirt/images/labloop-iso/$(basename "$ISO") $0 $VM
+  or grant search + read via ACL:
+      p=\"$ISO\"; while [ \"\$p\" != / ]; do
+          sudo setfacl -m u:$qemu_user:x \"\$p\"; p=\$(dirname \"\$p\")
+      done
+      sudo setfacl -m u:$qemu_user:r \"$ISO\""
+        fi
+    fi
+    note "virt-install: $VM (${MEM_MIB}MiB / ${VCPUS}vcpu / 80G qcow2 / UEFI / SPICE)"
+    virt-install --connect qemu:///system --name "$VM" \
+        --memory "$MEM_MIB" --vcpus "$VCPUS" \
+        --disk size=80,format=qcow2,bus=virtio \
+        --cdrom "$ISO" \
+        --os-variant generic \
+        --network network=default,model=virtio \
+        --graphics spice,listen=127.0.0.1 \
+        --video virtio \
+        --channel unix,target.type=virtio,target.name=org.qemu.guest_agent.0 \
+        --boot uefi --noautoconsole
+    # virt-install's emitted boot order is version-dependent: some builds
+    # write only <boot dev='hd'/> under firmware='efi', which drops a fresh
+    # domain into the UEFI shell (blank disk). Pin cdrom-first ordering;
+    # <os> can't change on a live domain, so a define alone isn't enough —
+    # destroy+start re-runs OVMF on the fixed XML (seconds into boot, safe).
+    $VIRSH dumpxml "$VM" > "$WORK/dom-boot.xml"
+    if ! grep -q "<boot dev='cdrom'/>" "$WORK/dom-boot.xml"; then
+        if grep -q "<boot dev='hd'/>" "$WORK/dom-boot.xml"; then
+            sed -i "s|<boot dev='hd'/>|<boot dev='cdrom'/>\n    <boot dev='hd'/>|" \
+                "$WORK/dom-boot.xml"
+        else  # no <boot dev> at all — OVMF-managed order; pin both
+            sed -i "s|</os>|    <boot dev='cdrom'/>\n    <boot dev='hd'/>\n  </os>|" \
+                "$WORK/dom-boot.xml"
+        fi
+        $VIRSH define "$WORK/dom-boot.xml" >/dev/null
+        note "boot order lacked cdrom — restarting domain on fixed XML"
+        $VIRSH destroy "$VM" 2>/dev/null || true
+        $VIRSH start "$VM" >/dev/null
+    fi
+    if [[ "$ISO" == *auto* ]]; then
+    cat <<EOF
+
+  *** UNATTENDED INSTALL *** — automatic-ubiquity ISO detected.
+  No interaction needed: partitioning, user 'lab', UTC timezone,
+  qemu-guest-agent, and reboot are all preseeded. The script
+  continues automatically when the installed agent comes up.
+EOF
+    else
+    cat <<EOF
+
+  *** MANUAL STEP ***
+  Open virt-manager -> $VM -> complete the Mint install.
+  (The GRUB menu waits for Enter — press it in the console;
+   the black screen after that is the live session loading, ~40s.)
+  Create the desktop user as:  lab
+  When the installed system boots, run inside the guest:
+
+      sudo apt update && sudo apt install -y qemu-guest-agent
+
+  This script polls the guest agent and continues automatically.
+EOF
+    fi
+fi
+
+# An unattended install can POWER OFF instead of rebooting, and a
+# resumed scratch build may also find the domain stopped. Eject the
+# install medium (so a restart can't boot back into the installer)
+# and power on the installed system.
+eject_cdrom() {
+    local t
+    t="$($VIRSH domblklist "$VM" 2>/dev/null | awk '$2 ~ /\.iso/ {print $1; exit}')"
+    [ -n "$t" ] || return 0
+    $VIRSH change-media "$VM" "$t" --eject --live --config >/dev/null 2>&1 \
+        || $VIRSH change-media "$VM" "$t" --eject --config >/dev/null 2>&1 \
+        || true
+}
+
+fix_esp_offline() {
+    # ubiquity under automatic mode can leave no usable boot entry — no
+    # nvram 'ubuntu' AND no \EFI\BOOT\BOOTX64.EFI fallback — so the
+    # installed system lands in the UEFI shell and the agent never comes
+    # up. Write the fallback loader while the domain is offline (the
+    # provisioning-time grub-install further down re-asserts it). Domain
+    # MUST be shut off when this runs — virt-customize refuses a live one.
+    if ! command -v virt-customize >/dev/null; then
+        echo "    WARN: virt-customize (libguestfs-tools) missing — cannot" >&2
+        echo "          write the UEFI fallback. If the guest lands at a" >&2
+        echo "          'Shell>' prompt: FS0: then \\EFI\\ubuntu\\grubx64.efi" >&2
+        return 0
+    fi
+    note "ESP fallback loader (offline, virt-customize)"
+    if ! sudo virt-customize --no-network -d "$VM" --run-command '
+            grub-install --target=x86_64-efi --efi-directory=/boot/efi \
+                --removable --no-nvram \
+            || { mkdir -p /boot/efi/EFI/BOOT
+                 cp /boot/efi/EFI/ubuntu/shimx64.efi \
+                    /boot/efi/EFI/BOOT/BOOTX64.EFI 2>/dev/null \
+                 || cp /boot/efi/EFI/ubuntu/grubx64.efi \
+                    /boot/efi/EFI/BOOT/BOOTX64.EFI
+                 cp /boot/efi/EFI/ubuntu/grubx64.efi \
+                    /boot/efi/EFI/BOOT/grubx64.efi
+                 cp /boot/efi/EFI/ubuntu/grub.cfg \
+                    /boot/efi/EFI/BOOT/grub.cfg; }'; then
+        echo "    WARN: ESP fallback write failed — if the guest lands at" >&2
+        echo "          a 'Shell>' prompt: FS0: then \\EFI\\ubuntu\\grubx64.efi" >&2
+    fi
+}
+
+note "waiting for qemu-guest-agent in $VM"
+echo "    (finish the Mint install, reboot, then install qemu-guest-agent)"
+w=0
+until agent_ready; do
+    if [ "$($VIRSH domstate "$VM" 2>/dev/null)" = "shut off" ]; then
+        eject_cdrom
+        fix_esp_offline
+        echo "    guest powered off — starting installed system (cdrom ejected)"
+        $VIRSH start "$VM" >/dev/null
+    fi
+    w=$((w+1)); [ $((w % 12)) -eq 0 ] && echo "    ... still waiting ($((w*5))s)"
+    sleep 5
+done
+echo "    agent responding (installed system)"
+
+# ------------------------------------------------------------------
+# Phase 2 — provision the guest (all via guest-agent, as needed user)
+# ------------------------------------------------------------------
+note "base packages"
+# GUEST_PKGS: this list is single-sourced in selfbuild/prefetch-cache.sh
+# (the prefetcher resolves its closure into the apt bundle). Add a
+# package here without adding it there and it silently falls back to
+# the mirror — fine online, dead in an offline build.
+qga "${APT_PRELUDE}apt-get update -qq || true ; \
+     DEBIAN_FRONTEND=noninteractive apt-get install -y \
+     podman uidmap acl pipx python-is-python3 git curl qemu-guest-agent \
+     spice-vdagent mc nodejs npm nftables"
+# casper is the live-ISO bootstrapper left over by the unattended
+# install — its md5check unit fails every boot (no md5sum.txt on an
+# installed disk) and serves no purpose post-install. Purge it.
+qga "DEBIAN_FRONTEND=noninteractive apt-get purge -y casper || true"
+# password policy: length floor only — pam_unix minlen=3, no quality
+# checks (pam_pwquality has a hardcoded floor of 6; use_authtok must go
+# too — it expects a token from the quality module and fails without it);
+# faillock below is the real defense against guessing
+qga "sed -i '/^password.*pam_unix\.so/ c password\t[success=1 default=ignore]\tpam_unix.so minlen=3 yescrypt' \
+     /etc/pam.d/common-password"
+
+note "faillock: lock lab after 10 failed logins for 15 min"
+qga "printf 'deny = 10\nfail_interval = 900\nunlock_time = 900\n' > /etc/security/faillock.conf"
+qga "grep -q 'pam_faillock.so preauth' /etc/pam.d/common-auth || \
+     sed -i 's|^\(auth.*pam_unix\.so.*\)|auth required pam_faillock.so preauth silent\n\1\nauth [default=die] pam_faillock.so authfail\nauth sufficient pam_faillock.so authsucc|' /etc/pam.d/common-auth"
+qga "grep -q 'pam_faillock' /etc/pam.d/common-account || \
+     sed -i '1i account required pam_faillock.so' /etc/pam.d/common-account"
+# our edits make common-* "locally modified" — the first libpam-runtime
+# update then asks 'Override local changes?' interactively and stalls
+# Mint's Update Manager. Preseed the answer: keep local changes.
+qga "echo 'libpam-runtime libpam-runtime/override boolean false' | debconf-set-selections"
+
+note "users: exp + mcp + linger, subuid/subgid"
+# mcp: dedicated service account for the TRUSTED zone — its podman runs
+# lab-cnt-mcp and owns mcp-state, so the lab shell (and therefore the
+# driving agent) cannot read, exec into, or kill the scientific state.
+qga "id exp >/dev/null 2>&1 || useradd -m -s /bin/bash exp"
+qga "id mcp >/dev/null 2>&1 || useradd -m -s /bin/bash mcp"
+qga "loginctl enable-linger lab exp mcp"
+qga "grep -q '^lab:' /etc/subuid || echo 'lab:100000:65536' >> /etc/subuid; \
+     grep -q '^exp:' /etc/subuid || echo 'exp:165536:65536' >> /etc/subuid; \
+     grep -q '^mcp:' /etc/subuid || echo 'mcp:231072:65536' >> /etc/subuid; \
+     grep -q '^lab:' /etc/subgid || echo 'lab:100000:65536' >> /etc/subgid; \
+     grep -q '^exp:' /etc/subgid || echo 'exp:165536:65536' >> /etc/subgid; \
+     grep -q '^mcp:' /etc/subgid || echo 'mcp:231072:65536' >> /etc/subgid"
+
+note "/srv/lab layout + ACLs"
+# guest execs run under /bin/sh (dash): no brace expansion — spell out
+qga "rmdir '/srv/lab/{workspace,exchange,mcp-state,experiments}' 2>/dev/null; \
+     mkdir -p /srv/lab/workspace /srv/lab/exchange /srv/lab/mcp-state /srv/lab/experiments \
+              /srv/lab/incoming && \
+     chown lab:lab /srv/lab/workspace /srv/lab/incoming && \
+     chown mcp:mcp /srv/lab/mcp-state && \
+     chown exp:exp /srv/lab/exchange /srv/lab/experiments && \
+     chmod 700 /srv/lab/mcp-state && \
+     setfacl -m u:exp:rx /srv/lab/workspace && \
+     setfacl -m u:mcp:rx /srv/lab/workspace && \
+     setfacl -m u:lab:rwx /srv/lab/exchange && \
+     setfacl -d -m o::rX /srv/lab/exchange"
+
+note "staging whitelisted payloads on the host"
+# WHITELIST, not blacklist: only what the guest needs crosses the agent
+# channel. ml-labloop contributes deploy/ + containers/ — docs/, .devin/,
+# .git/, host-side scripts NEVER enter the VM (confidential, and the
+# workspace is mounted read-only into the HOSTILE container).
+tar -C "$REPO" -cf "$WORK/labloop-payload.tar" deploy containers
+
+# gnosislab package ctx — no source tree crosses the boundary. The
+# image installs the pinned PyPI release; the ctx carries the wheel
+# closure (offline install) plus the sdist's config payload
+# (ports.env + ml-*.toml). BUILD_REV is written inside the image by
+# the Containerfile — a pinned release is clean by definition.
+mkdir -p "$WORK/mcp/pkgs/wheels" "$WORK/mcp/pkgs/gnosislab"
+if compgen -G "$CACHE_ROOT/wheels/gnosislab/gnosislab-${GNOSISLAB_VER}-*.whl" >/dev/null \
+   && [ -f "$CACHE_ROOT/pkgs/gnosislab/ports.env" ]; then
+    cp -a "$CACHE_ROOT/wheels/gnosislab/." "$WORK/mcp/pkgs/wheels/"
+    cp -a "$CACHE_ROOT/pkgs/gnosislab/." "$WORK/mcp/pkgs/gnosislab/"
+    MCP_OFFLINE=1
+else
+    # no wheelhouse cached — the guest build falls back to fetching
+    # gnosislab + its sdist configs from PyPI inside the image build
+    MCP_OFFLINE=0
+fi
+cp "$REPO/containers/mcp/Containerfile" \
+   "$REPO/containers/mcp/entrypoint.sh" "$WORK/mcp/"
+tar -C "$WORK/mcp" -cf "$WORK/mcp-ctx.tar" .
+
+note "pushing payloads over the agent channel"
+qga_push "$WORK/labloop-payload.tar" /tmp/labloop-payload.tar
+qga_push "$WORK/mcp-ctx.tar"         /tmp/mcp-ctx.tar
+qga "mkdir -p /srv/lab/workspace/ml-labloop /home/mcp/build/mcp && \
+     tar -xf /tmp/labloop-payload.tar -C /srv/lab/workspace/ml-labloop && \
+     tar -xf /tmp/mcp-ctx.tar         -C /home/mcp/build/mcp && \
+     rm -f /tmp/labloop-payload.tar /tmp/mcp-ctx.tar && \
+     chown -R lab:lab /srv/lab/workspace/ml-labloop && \
+     chown -R mcp:mcp /home/mcp/build"
+
+note "podman networks (one per user namespace, subnets pinned for labloop.nft)"
+qga "su - mcp -c 'podman network exists lab-net-mcp || \
+     podman network create --subnet 172.31.0.0/24 lab-net-mcp'"
+qga "su - exp -c 'podman network exists lab-net-exp || \
+     podman network create --subnet 172.30.0.0/24 lab-net-exp'"
+
+note "images: load prefetched tarballs, else guest-side build"
+# prefetch-cache.sh bakes both images host-side (registry pulls, debian
+# apt, uv sync all execute in the online phase). Loading the tarballs
+# into each user's rootless store gives the quadlets the same
+# localhost/lab-img-* names the builds would produce.
+img_mcp=""; img_exp=""
+if [ "$CACHE_UP" = 1 ]; then
+    img_mcp=$(basename "$(ls -t "$CACHE_ROOT"/images/lab-img-mcp-*.tar 2>/dev/null | head -1)" 2>/dev/null || true)
+    img_exp=$(basename "$(ls -t "$CACHE_ROOT"/images/lab-img-exp-*.tar 2>/dev/null | head -1)" 2>/dev/null || true)
+fi
+if [ -n "$img_mcp" ] && [ -n "$img_exp" ]; then
+    qga "curl -fsS -o '/tmp/$img_mcp' '$CACHE_URL/images/$img_mcp' && \
+         curl -fsS -o '/tmp/$img_exp' '$CACHE_URL/images/$img_exp' && \
+         su - mcp -c 'podman load -i /tmp/$img_mcp' && \
+         su - exp -c 'podman load -i /tmp/$img_exp' && \
+         rm -f '/tmp/$img_mcp' '/tmp/$img_exp'"
+else
+    qga "su - mcp -c 'podman build -t lab-img-mcp \
+         --build-arg GNOSISLAB_VERSION=$GNOSISLAB_VER \
+         --build-arg OFFLINE=$MCP_OFFLINE \
+         -f /home/mcp/build/mcp/Containerfile /home/mcp/build/mcp'"
+    qga "su - exp -c 'podman build -t lab-img-exp \
+         /srv/lab/workspace/ml-labloop/containers/experiment'"
+fi
+
+# build context is only needed at build time and would retain the
+# wheelhouse + configs otherwise — drop it before freeze
+qga "rm -rf /home/mcp/build"
+
+note "trial interpreter env: /srv/lab/trial-env -> /opt/trial-env (volume; survives recreates)"
+# episteme's executor defaults to sys.executable — the slim server venv
+# with NO scientific stack, which made warmup trials degrade to
+# dependency-free rewrites. Populate a dedicated venv ONCE, on a
+# quadlet-mounted volume: survives container recreates (the image layer
+# would not), stays mcp-owned (lab/agent cannot tamper), and is
+# updatable later with another `podman run` — no image rebuild needed.
+# entrypoint.sh only exports ML_EPISTEME_EXECUTOR_PYTHON when the env
+# exists, so an unpopulated dir degrades to the slim interpreter.
+# wheels from the cache when available: the bundle is resolved inside
+# python:3.12-slim at prefetch time so the tags match this interpreter.
+if [ "$CACHE_UP" = 1 ] && compgen -G "$CACHE_ROOT/wheels/trial-env/*.whl" >/dev/null; then
+    whl_list="$(ls "$CACHE_ROOT"/wheels/trial-env | tr '\n' ' ')"
+    qga "install -d -m 0755 -o mcp -g mcp /srv/lab/trial-env /srv/lab/wheelhouse && \
+         cd /srv/lab/wheelhouse && \
+         for w in $whl_list; do curl -fsS -o \"\$w\" \"$CACHE_URL/wheels/trial-env/\$w\" || exit 1; done && \
+         chown -R mcp:mcp /srv/lab/wheelhouse && \
+         su - mcp -c 'podman run --rm -e HOME=/tmp --entrypoint uv \
+             -v /srv/lab/trial-env:/opt/trial-env lab-img-mcp \
+             venv /opt/trial-env' && \
+         su - mcp -c 'podman run --rm -e HOME=/tmp --entrypoint uv \
+             -v /srv/lab/trial-env:/opt/trial-env \
+             -v /srv/lab/wheelhouse:/wheels lab-img-mcp \
+             pip install --python /opt/trial-env/bin/python --no-cache \
+             --no-index --find-links=/wheels \
+             numpy pandas scipy scikit-learn matplotlib reportlab'"
+else
+    qga "install -d -m 0755 -o mcp -g mcp /srv/lab/trial-env && \
+         su - mcp -c 'podman run --rm -e HOME=/tmp --entrypoint uv \
+             -v /srv/lab/trial-env:/opt/trial-env lab-img-mcp \
+             venv /opt/trial-env' && \
+         su - mcp -c 'podman run --rm -e HOME=/tmp --entrypoint uv \
+             -v /srv/lab/trial-env:/opt/trial-env lab-img-mcp \
+             pip install --python /opt/trial-env/bin/python --no-cache \
+             numpy pandas scipy scikit-learn matplotlib reportlab'"
+fi
+
+note "episteme ingest token (generated, never committed)"
+qga "printf 'ML_EPISTEME_INGEST_TOKEN=%s\n' \"\$(head -c 32 /dev/urandom | base64)\" \
+         > /srv/lab/mcp-state/ingest.env && \
+     chown mcp:mcp /srv/lab/mcp-state/ingest.env && \
+     chmod 600 /srv/lab/mcp-state/ingest.env"
+# ^ ports.env ships ML_EPISTEME_INGEST_PORT=28082; episteme refuses to
+#   start without a token (writes to the state store must not run
+#   unauthenticated). The quadlet EnvironmentFile= reads it here —
+#   must exist BEFORE lab-cnt-mcp starts or the supervisor restart-loops.
+
+note "quadlets + linger services"
+# lab-cnt-mcp lives in the mcp account's podman — invisible to lab.
+# ports.env is pulled OUT of the loaded image (/opt/gnosislab on
+# packaged images, /opt/ml-scientist on pre-switch ones) — publish
+# rules and the watchdog's copy always match what the VM actually
+# runs, whatever vintage the image is, and never drift from it.
+PORTS_ENV_TXT=$(qga "su - mcp -c 'podman run --rm --entrypoint sh \
+    lab-img-mcp -c \"cat /opt/*/ports.env\"'")
+[ -n "$PORTS_ENV_TXT" ] || die "no ports.env inside lab-img-mcp image"
+printf '%s\n' "$PORTS_ENV_TXT" > "$WORK/ports.env"
+( set -a; . "$WORK/ports.env"; set +a
+  grep -oE '^ML_[A-Z_]+_PORT' "$WORK/ports.env" \
+      | while read -r v; do
+            printf 'PublishPort=127.0.0.1:%s:%s\n' "${!v}" "${!v}"
+        done ) > "$WORK/mcp-ports.publish"
+sed -e "/^@MCP_PORTS_PUBLISH@\$/r $WORK/mcp-ports.publish" \
+    -e "/^@MCP_PORTS_PUBLISH@\$/d" \
+    "$REPO/deploy/quadlets/lab-cnt-mcp.container" \
+    > "$WORK/lab-cnt-mcp.container"
+qga_push "$WORK/lab-cnt-mcp.container" /tmp/lab-cnt-mcp.container
+qga "install -d -m 0755 -o mcp -g mcp /home/mcp/.config/containers/systemd && \
+     install -m 0644 -o mcp -g mcp /tmp/lab-cnt-mcp.container \
+         /home/mcp/.config/containers/systemd/ && \
+     rm -f /tmp/lab-cnt-mcp.container"
+qga "su - mcp -c 'export XDG_RUNTIME_DIR=/run/user/\$(id -u); \
+     systemctl --user daemon-reload && systemctl --user start lab-cnt-mcp'"
+
+# Trusted-zone liveness watchdog (rc-11): exit-based recovery
+# (entrypoint wait -n, quadlet Restart=) cannot see a HANG — a wedged
+# event loop listens forever. This timer probes /health and restarts
+# the zone on sustained failure. mcp-owned deliberately: `lab` must not
+# gain the ability to touch the trusted zone. Its probe ports come from
+# ports.env (~mcp/.config/labloop/ports.env) — never hardcoded.
+qga_push "$WORK/ports.env" /tmp/labloop-ports.env
+qga "command -v curl >/dev/null && command -v ss >/dev/null || \
+     echo 'WARN: watchdog deps (curl/ss) missing on guest' >&2; \
+     install -d -m 0755 -o mcp -g mcp /home/mcp/.local/sbin \
+     /home/mcp/.local/state/labloop /home/mcp/.config/systemd/user \
+     /home/mcp/.config/labloop && \
+     install -m 0644 -o mcp -g mcp /tmp/labloop-ports.env \
+         /home/mcp/.config/labloop/ports.env && \
+     rm -f /tmp/labloop-ports.env && \
+     install -m 0755 -o mcp -g mcp \
+         /srv/lab/workspace/ml-labloop/deploy/labloop-mcp-watchdog \
+         /home/mcp/.local/sbin/ && \
+     install -m 0644 -o mcp -g mcp \
+         /srv/lab/workspace/ml-labloop/deploy/quadlets/labloop-mcp-watchdog.service \
+         /srv/lab/workspace/ml-labloop/deploy/quadlets/labloop-mcp-watchdog.timer \
+         /home/mcp/.config/systemd/user/"
+qga "su - mcp -c 'export XDG_RUNTIME_DIR=/run/user/\$(id -u); \
+     systemctl --user daemon-reload && \
+     systemctl --user enable --now labloop-mcp-watchdog.timer'"
+# render the hostile-zone ceiling (@EXP_CPUS@/@EXP_MEM_MIB@) for this
+# guest's size — the payload copy keeps the placeholders
+sed -e "s/@EXP_CPUS@/$EXP_CPUS/g" -e "s/@EXP_MEM_MIB@/$EXP_MEM_MIB/g" \
+    "$REPO/deploy/quadlets/lab-cnt-exp.container" \
+    > "$WORK/lab-cnt-exp.container"
+qga_push "$WORK/lab-cnt-exp.container" /tmp/lab-cnt-exp.container
+qga "install -d -m 0755 -o exp -g exp /home/exp/.config/containers/systemd && \
+     install -m 0644 -o exp -g exp /tmp/lab-cnt-exp.container \
+         /home/exp/.config/containers/systemd/ && \
+     rm -f /tmp/lab-cnt-exp.container"
+qga "su - exp -c 'export XDG_RUNTIME_DIR=/run/user/\$(id -u); \
+     systemctl --user daemon-reload && systemctl --user start lab-cnt-exp'"
+
+note "network fence: labloop.nft (hostile -> private space must drop)"
+qga "install -d /etc/nftables.d && \
+     install -m 0644 /srv/lab/workspace/ml-labloop/deploy/labloop.nft /etc/nftables.d/labloop.nft && \
+     (grep -q 'nftables.d' /etc/nftables.conf || echo 'include \"/etc/nftables.d/*.nft\"' >> /etc/nftables.conf) && \
+     nft -f /etc/nftables.d/labloop.nft && \
+     systemctl enable nftables"
+
+note "executor + builder + export channels: labloop-exec/-build/-export, sudoers, tmpfiles"
+qga "install -m 0755 -o root -g root \
+         /srv/lab/workspace/ml-labloop/deploy/labloop-exec /usr/local/sbin/labloop-exec && \
+     install -m 0755 -o root -g root \
+         /srv/lab/workspace/ml-labloop/deploy/labloop-build /usr/local/sbin/labloop-build && \
+     install -m 0755 -o root -g root \
+         /srv/lab/workspace/ml-labloop/deploy/labloop-export /usr/local/sbin/labloop-export && \
+     install -m 0755 -o root -g root \
+         /srv/lab/workspace/ml-labloop/deploy/labloop-update-opencode \
+         /usr/local/sbin/labloop-update-opencode && \
+     install -m 0755 -o root -g root \
+         /srv/lab/workspace/ml-labloop/deploy/labloop-fault \
+         /usr/local/sbin/labloop-fault && \
+     install -m 0440 -o root -g root \
+         /srv/lab/workspace/ml-labloop/deploy/labloop.sudoers /etc/sudoers.d/labloop && \
+     install -m 0644 -o root -g root \
+         /srv/lab/workspace/ml-labloop/deploy/labloop-tmpfiles.conf /etc/tmpfiles.d/labloop.conf && \
+     systemd-tmpfiles --create /etc/tmpfiles.d/labloop.conf && \
+     install -d -m 0755 -o lab -g lab /srv/lab/incoming && \
+     visudo -c | grep -q 'labloop: parsed OK'"
+qga_lab "sudo -u exp /usr/local/sbin/labloop-exec id -u"   # must print exp's uid, no password
+# the one lab->mcp grant: `status` is read-only, no fault is injected —
+# but it proves the sudoers rule + wrapper resolve end to end
+qga_lab "sudo -u mcp /usr/local/sbin/labloop-fault status >/dev/null"
+
+note "VSCodium + Zoo Code + vscode-pdf"
+# cache path: pinned release .deb + local .vsix installs — the gitlab
+# apt repo and open-vsx are never touched. The deb's dep closure is in
+# the apt bundle (prefetch resolves it via --print-uris on the deb).
+cod_deb=""; vsix_list=""
+if [ "$CACHE_UP" = 1 ]; then
+    cod_deb=$(basename "$(ls -t "$CACHE_ROOT"/pkgs/codium_*.deb 2>/dev/null | head -1)" 2>/dev/null || true)
+    vsix_list="$(cd "$CACHE_ROOT/pkgs" 2>/dev/null && ls *.vsix 2>/dev/null | tr '\n' ' ')"
+fi
+if [ -n "$cod_deb" ]; then
+    qga "curl -fsS -o '/tmp/$cod_deb' '$CACHE_URL/pkgs/$cod_deb' && \
+         DEBIAN_FRONTEND=noninteractive apt-get install -y '/tmp/$cod_deb' && \
+         rm -f '/tmp/$cod_deb'"
+else
+    qga "wget -qO - https://gitlab.com/paulcarroty/vscodium-deb-rpm-repo/raw/master/pub.gpg \
+             | gpg --batch --yes --dearmor -o /usr/share/keyrings/vscodium-archive-keyring.gpg && \
+         echo 'deb [signed-by=/usr/share/keyrings/vscodium-archive-keyring.gpg] https://download.vscodium.com/debs vscodium main' \
+             > /etc/apt/sources.list.d/vscodium.list && \
+         apt-get update -qq && apt-get install -y codium"
+fi
+if [ -n "$vsix_list" ]; then
+    for v in $vsix_list; do
+        qga "curl -fsS -o '/tmp/$v' '$CACHE_URL/pkgs/$v'"
+        # the rm must run as root — /tmp is sticky (1777), so lab cannot
+        # delete a root-owned file: 'Operation not permitted'
+        qga_lab "codium --install-extension '/tmp/$v'" && qga "rm -f '/tmp/$v'"
+    done
+else
+    qga_lab "codium --install-extension ZooCodeOrganization.zoo-code && \
+             codium --install-extension tomoki1207.pdf"
+fi
+
+# VSCodium (Electron) prompts to CREATE a gnome-keyring on first launch
+# to store extension secrets — the daemon runs but no keyring exists.
+# --password-store=basic makes Electron keep secrets in the profile
+# instead of libsecret: no prompt, ever. Trade-off: tokens sit
+# unencrypted in ~/.config/VSCodium — acceptable in a disposable lab
+# where no real secrets should be stored anyway.
+note "codium --password-store=basic (kill keyring prompts)"
+qga "sed -i 's|^Exec=/usr/share/codium/codium |Exec=/usr/share/codium/codium --password-store=basic |' \
+         /usr/share/applications/codium.desktop && \
+     printf '#!/bin/sh\nexec /usr/share/codium/codium --password-store=basic \"\$@\"\n' \
+         > /usr/local/bin/codium && \
+     chmod 755 /usr/local/bin/codium"
+
+# LaTeX on the DRIVER too — the hostile-zone toolchain is for running
+# generated code, but the editor itself needs a local TeX install or it
+# reports 'no LaTeX environment detected'. Same lean set as the image.
+note "driver TeX Live (editor toolchain)"
+qga "DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+     texlive-latex-base texlive-latex-recommended \
+     texlive-fonts-recommended latexmk"
+
+# numlock desync: SPICE LED-sync flips guest/host numlock when the
+# console loses focus (light on, keys act as arrows). Force guest
+# numlock ON at every login instead of trusting the synced LED.
+note "numlockx: force numlock on at login (SPICE desync fix)"
+qga "apt-get install -y numlockx && \
+     install -d -m 0755 -o lab -g lab /home/lab/.config/autostart && \
+     printf '[Desktop Entry]\nType=Application\nName=NumLock\nExec=numlockx on\nX-GNOME-Autostart-enabled=true\n' \
+         > /home/lab/.config/autostart/numlockx.desktop && \
+     chown lab:lab /home/lab/.config/autostart/numlockx.desktop"
+
+note "uv system-wide + duckduckgo-search deps warmed"
+# cache path: uv from its wheel; the warmup resolves duckduckgo-mcp-server
+# purely from the prefetched closure (--no-index --find-links) so uv's
+# cache is primed offline instead of by luck.
+if [ "$CACHE_UP" = 1 ] && compgen -G "$CACHE_ROOT/wheels/uvx/uv-*.whl" >/dev/null; then
+    uvx_list="$(ls "$CACHE_ROOT"/wheels/uvx | tr '\n' ' ')"
+    qga "mkdir -p /tmp/uvx-wheels && cd /tmp/uvx-wheels && \
+         for w in $uvx_list; do curl -fsS -o \"\$w\" \"$CACHE_URL/wheels/uvx/\$w\" || exit 1; done && \
+         chown -R lab:lab /tmp/uvx-wheels"
+    qga_lab "pipx install /tmp/uvx-wheels/uv-*.whl"
+    qga_lab "timeout 120 ~/.local/bin/uvx --no-index --find-links /tmp/uvx-wheels \
+             duckduckgo-mcp-server </dev/null >/dev/null 2>&1 || true"
+else
+    qga_lab "pipx install uv && timeout 120 ~/.local/bin/uvx duckduckgo-mcp-server </dev/null >/dev/null 2>&1 || true"
+fi
+qga "install -m 0755 /home/lab/.local/share/pipx/venvs/uv/bin/uv \
+                    /home/lab/.local/share/pipx/venvs/uv/bin/uvx /usr/local/bin/"
+
+note "Zoo Code MCP settings (5 HTTP loopback + duckduckgo stdio)"
+qga_push "$REPO/deploy/zoo-code-mcp_settings.json" /tmp/mcp_settings.json
+qga "install -d -m 0755 -o lab -g lab /home/lab/.config/VSCodium/User/globalStorage/zoocodeorganization.zoo-code/settings && \
+     install -m 0644 -o lab -g lab /tmp/mcp_settings.json \
+         /home/lab/.config/VSCodium/User/globalStorage/zoocodeorganization.zoo-code/settings/ && \
+     chown -R lab:lab /home/lab/.config/VSCodium"
+
+# provider config lives in state.vscdb (globalState), not files —
+# seed openai-compatible -> host vLLM so every clone is preconfigured.
+# Model id intentionally NOT seeded (operator-private; user picks from
+# the endpoint's /v1/models list on first use).
+note "Zoo Code provider seed (openai-compatible -> host vLLM)"
+qga_push "$REPO/deploy/seed-zoo-state.py" /tmp/seed-zoo-state.py
+qga_lab "python3 /tmp/seed-zoo-state.py"
+
+note "opencode CLI 2.0.15 via npm + MCP config (global path — found from any cwd)"
+# cache path: @opencode/cli is a 2 KB launcher whose real payload is an
+# optionalDependency platform binary (a registry fetch even from the
+# tgz). So prefetch-cache.sh packs the linux-x64 tarballs directly and
+# we install package/bin/opencode ourselves — choosing baseline vs
+# regular by /proc/cpuinfo, exactly like the package's postinstall.mjs.
+oc_tgz=""
+if [ "$CACHE_UP" = 1 ]; then
+    oc_tgz=$(basename "$(ls -t "$CACHE_ROOT"/pkgs/opencode-cli-linux-x64-[0-9]*.tgz 2>/dev/null | head -1)" 2>/dev/null || true)
+    oc_base=$(basename "$(ls -t "$CACHE_ROOT"/pkgs/opencode-cli-linux-x64-baseline-*.tgz 2>/dev/null | head -1)" 2>/dev/null || true)
+fi
+if [ -n "$oc_tgz" ] && [ -n "${oc_base:-}" ]; then
+    qga "curl -fsS -o '/tmp/$oc_tgz' '$CACHE_URL/pkgs/$oc_tgz' && \
+         curl -fsS -o '/tmp/$oc_base' '$CACHE_URL/pkgs/$oc_base' && \
+         if grep -qw avx2 /proc/cpuinfo; then t='$oc_tgz'; else t='$oc_base'; fi && \
+         tar xzf \"/tmp/\$t\" -O package/bin/opencode > /usr/local/bin/opencode && \
+         chmod 755 /usr/local/bin/opencode && rm -f '/tmp/$oc_tgz' '/tmp/$oc_base'"
+else
+    qga "rm -f /usr/local/bin/opencode && npm install -g @opencode/cli@2.0.15"
+fi
+qga_push "$REPO/deploy/opencode.json" /tmp/opencode.json
+qga_push "$REPO/deploy/opencode.jsonc" /tmp/opencode.jsonc
+qga "install -d -m 0755 -o lab -g lab /home/lab/.config/opencode && \
+     install -m 0644 -o lab -g lab /tmp/opencode.json \
+         /home/lab/.config/opencode/opencode.json && \
+     install -m 0644 -o lab -g lab /tmp/opencode.jsonc \
+         /home/lab/.config/opencode/opencode.jsonc && \
+     rm -f /tmp/opencode.json /tmp/opencode.jsonc && \
+     chown -R lab:lab /home/lab/.config"
+
+note "guest hostname = domain name (sa-02); timezone UTC"
+qga "hostnamectl set-hostname '$VM'"
+qga "timedatectl set-timezone UTC"
+
+note "driver workspace: ~/workspace/experiments (authoring zone)"
+qga "mkdir -p /home/lab/workspace/experiments && \
+     chown -R lab:lab /home/lab/workspace"
+
+note "agent guide + security manual + desktop readiness check"
+qga "install -m 0644 -o lab -g lab \
+         /srv/lab/workspace/ml-labloop/deploy/AGENT-LAB-GUIDE.md \
+         /home/lab/AGENT-LAB-GUIDE.md && \
+     install -m 0644 -o lab -g lab \
+         /srv/lab/workspace/ml-labloop/deploy/SECURITY-MANUAL.md \
+         /home/lab/SECURITY-MANUAL.md && \
+     install -m 0644 -o lab -g lab \
+         /srv/lab/workspace/ml-labloop/deploy/SECURITY-COMPLIANCE-NOTE.md \
+         /home/lab/SECURITY-COMPLIANCE-NOTE.md && \
+     install -m 0644 -o lab -g lab \
+         /srv/lab/workspace/ml-labloop/deploy/GENESIS-RESEARCH-PROMPT.md \
+         /home/lab/GENESIS-RESEARCH-PROMPT.md && \
+     ln -sf ../AGENT-LAB-GUIDE.md /home/lab/workspace/AGENTS.md && \
+     ln -sf ../SECURITY-MANUAL.md /home/lab/workspace/SECURITY-MANUAL.md && \
+     ln -sf ../GENESIS-RESEARCH-PROMPT.md \
+            /home/lab/workspace/GENESIS-RESEARCH-PROMPT.md && \
+     chown -h lab:lab /home/lab/workspace/AGENTS.md \
+                    /home/lab/workspace/SECURITY-MANUAL.md \
+                    /home/lab/workspace/GENESIS-RESEARCH-PROMPT.md && \
+     install -d -m 0755 -o lab -g lab /home/lab/Desktop && \
+     install -m 0755 -o lab -g lab \
+         /srv/lab/workspace/ml-labloop/deploy/check-lab-ready.sh \
+         /home/lab/Desktop/check-lab-ready.sh && \
+     install -m 0775 -o lab -g lab \
+         /srv/lab/workspace/ml-labloop/deploy/Lab-Dashboard.desktop \
+         /home/lab/Desktop/Lab-Dashboard.desktop && \
+     install -m 0644 -o lab -g lab \
+         /srv/lab/workspace/ml-labloop/deploy/Desktop-README.md \
+         /home/lab/Desktop/README.md"
+
+note "opencode desktop launcher (cwd = ~/workspace)"
+qga_push "$REPO/assets/opencode-wordmark-dark.png" /tmp/opencode.png
+qga "install -d -m 0755 -o lab -g lab /home/lab/.local/share/icons /home/lab/.local/share/applications && \
+     install -m 0644 -o lab -g lab /tmp/opencode.png \
+         /home/lab/.local/share/icons/opencode.png && \
+     install -m 0755 /srv/lab/workspace/ml-labloop/deploy/opencode-lab \
+         /usr/local/bin/opencode-lab && \
+     install -m 0755 -o lab -g lab \
+         /srv/lab/workspace/ml-labloop/deploy/opencode.desktop \
+         /home/lab/Desktop/opencode.desktop && \
+     install -m 0644 -o lab -g lab \
+         /srv/lab/workspace/ml-labloop/deploy/opencode.desktop \
+         /home/lab/.local/share/applications/opencode.desktop && \
+     rm -f /tmp/opencode.png"
+qga_lab "dbus-run-session gio set /home/lab/Desktop/opencode.desktop \
+     metadata::trusted true 2>/dev/null || true"
+
+# opt-in patches land on the Desktop, NOT in the workspace payload —
+# they contain operator-local config (model names, endpoint IPs) that
+# the hostile zone's read-only mount has no business seeing.
+note "optional-patches -> ~/Desktop/optional-patches (opt-in, run by hand)"
+# LABLOOP_PATCHES_DIR overrides the payload source — optional-patches is
+# blacklisted from the public export, so builds run from the staged copy
+# must point at the private dir explicitly. tolerate absence either way:
+# a literal unmatched glob in qga_push dies on FileNotFoundError and
+# kills the whole provision.
+PATCHES_DIR="${LABLOOP_PATCHES_DIR:-$REPO/optional-patches}"
+# staged public copies can't carry optional-patches (blacklisted —
+# operator-local config), so a pipeline run from the staged tree
+# falls back to the sibling source repo: <staged>/../../ml-labloop.
+# Whatever is in that dir bakes in — no env var required.
+if [ ! -d "$PATCHES_DIR" ]; then
+    cand="$(cd "$REPO/../.." 2>/dev/null && pwd)/ml-labloop/optional-patches"
+    [ -d "$cand" ] && PATCHES_DIR="$cand"
+fi
+if [ -d "$PATCHES_DIR" ]; then
+    qga "install -d -m 0755 -o lab -g lab /home/lab/Desktop/optional-patches"
+    for f in "$PATCHES_DIR"/*; do
+        b="$(basename "$f")"
+        mode=0644; case "$b" in *.sh) mode=0755 ;; esac
+        qga_push "$f" "/tmp/opatch-$b"
+        qga "install -m $mode -o lab -g lab '/tmp/opatch-$b' \
+             '/home/lab/Desktop/optional-patches/$b' && rm -f '/tmp/opatch-$b'"
+    done
+else
+    echo "    (no patches dir — set LABLOOP_PATCHES_DIR or skipping)"
+fi
+
+# diagnostics reports -> ~/Desktop/diagnostics. They are *.md shipped
+# in the gnosislab sdist (extracted into the pkgs layer at prefetch
+# time). Absent without the cache — they are docs, not runtime.
+DIAG_DIR="$CACHE_ROOT/pkgs/gnosislab/diagnostics"
+if [ -d "$DIAG_DIR" ] && [ -n "$(ls -A "$DIAG_DIR" 2>/dev/null)" ]; then
+    note "diagnostics -> ~/Desktop/diagnostics"
+    qga "install -d -m 0755 -o lab -g lab /home/lab/Desktop/diagnostics"
+    for f in "$DIAG_DIR"/*; do
+        b="$(basename "$f")"
+        qga_push "$f" "/tmp/diag-$b"
+        qga "install -m 0644 -o lab -g lab '/tmp/diag-$b' \
+             '/home/lab/Desktop/diagnostics/$b' && rm -f '/tmp/diag-$b'"
+    done
+fi
+
+note "panel clock: %H:%M %Z + UTC (first-login autostart fixer)"
+# the perchannel XML does not exist until lab's first graphical login,
+# so the durable fix is an autostart hook that sets it via xfconf-query.
+# The plugin id is discovered dynamically (Mint assigns plugin-N).
+qga_push "$REPO/deploy/labloop-panel-clock.sh" /tmp/labloop-panel-clock.sh
+qga_push "$REPO/deploy/labloop-panel-clock.desktop" /tmp/labloop-panel-clock.desktop
+qga "install -d -m 0755 /usr/local/libexec && \
+     install -m 0755 /tmp/labloop-panel-clock.sh /usr/local/libexec/ && \
+     install -m 0644 /tmp/labloop-panel-clock.desktop /etc/xdg/autostart/ && \
+     rm -f /tmp/labloop-panel-clock.*"
+
+note "display mode: ${RES_X}x${RES_Y} @ ${REFRESH} Hz (greeter + login autostart)"
+# the XML pins the EDID native mode; non-native rates (60, 59.94, 30…)
+# are injected by the login hook as a reduced-blanking modeline. Two
+# hooks run the same script: lightdm display-setup (root, before the
+# greeter — so the login screen is already at the right mode) and the
+# XDG autostart (repair path if a session profile re-applied the old
+# one). The --fb/--panning on the xrandr call is what keeps the pointer
+# from staying clamped to the pre-switch geometry.
+printf 'RES_X=%s\nRES_Y=%s\nREFRESH=%s\n' "$RES_X" "$RES_Y" "$REFRESH" \
+    > "$WORK/display.conf"
+qga_push "$WORK/display.conf" /tmp/labloop-display.conf
+qga_push "$REPO/deploy/labloop-display.sh" /tmp/labloop-display.sh
+qga_push "$REPO/deploy/labloop-display.desktop" /tmp/labloop-display.desktop
+qga_push "$REPO/deploy/labloop-display-lightdm.conf" \
+         /tmp/labloop-display-lightdm.conf
+qga "install -d -m 0755 /usr/local/libexec /etc/labloop \
+         /etc/lightdm/lightdm.conf.d && \
+     install -m 0644 /tmp/labloop-display.conf /etc/labloop/display.conf && \
+     install -m 0755 /tmp/labloop-display.sh /usr/local/libexec/ && \
+     install -m 0644 /tmp/labloop-display.desktop /etc/xdg/autostart/ && \
+     install -m 0644 /tmp/labloop-display-lightdm.conf \
+         /etc/lightdm/lightdm.conf.d/50-labloop-display.conf && \
+     rm -f /tmp/labloop-display.*"
+# best-effort immediate patch too — covers the case where lab's panel
+# config already exists (template re-provision after a session)
+qga "python3 - <<'EOF'
+import re
+p = '/home/lab/.config/xfce4/xfconf/xfce-perchannel-xml/xfce4-panel.xml'
+try:
+    xml = open(p).read()
+except FileNotFoundError:
+    raise SystemExit(0)
+for m in re.finditer(r'(<property name=\"plugin-\d+\" type=\"empty\">)(.*?)(</property>)', xml, re.S):
+    if 'value=\"clock\"' not in m.group(2):
+        continue
+    blk = m.group(2).replace(
+        '<property name=\"digital-time-format\" type=\"empty\"/>',
+        '<property name=\"digital-time-format\" type=\"string\" value=\"%H:%M %Z\"/>')
+    if 'name=\"timezone\"' not in blk:
+        blk = blk.rstrip() + '\n      <property name=\"timezone\" type=\"string\" value=\"UTC\"/>\n    '
+    xml = xml[:m.start()] + m.group(1) + blk + m.group(3) + xml[m.end():]
+    open(p, 'w').write(xml)
+    break
+EOF
+chown lab:lab /home/lab/.config/xfce4/xfconf/xfce-perchannel-xml/xfce4-panel.xml 2>/dev/null || true"
+# ^ driver-side scratch for authoring/reviewing experiment code before
+#   it crosses into the hostile zone via /exchange. Distinct from
+#   /srv/lab/experiments, which is exp-owned hostile-zone artifacts.
+
+note "security battery — hard gate (must be 0 FAIL)"
+out="$(qga_lab "bash /srv/lab/workspace/ml-labloop/deploy/security-battery.sh")"
+echo "$out"
+echo "$out" | grep -q "0 FAIL" || die "battery failed — fix before freezing"
+
+note "functional battery — the lab must actually work (0 FAIL)"
+out="$(qga_lab "bash /srv/lab/workspace/ml-labloop/deploy/functional-battery.sh")"
+echo "$out"
+echo "$out" | grep -q "0 FAIL" || die "functional battery failed — fix before freezing"
+
+# ------------------------------------------------------------------
+# Phase 3 — freeze
+# ------------------------------------------------------------------
+note "spice-vdagent installed (auto display-resize); clipboard stays off"
+qga "apt-get install -y spice-vdagent"
+# ^ vdagent is REQUIRED for guest resolution to follow the client
+#   window (fullscreen = host monitor native res, shown in Display).
+#   Clipboard is still dead: <clipboard copypaste='no'/> is enforced
+#   server-side by QEMU's SPICE server — the agent cannot reopen it.
+#   Do NOT purge vdagent; that was an earlier over-correction.
+
+# cache plumbing must not persist in the frozen template: the apt
+# source points at a build-time host address (dead in every clone),
+# the wheelhouse is host-served scratch, and /tmp holds fetched
+# tarballs. Strip them so clones carry no host references.
+note "cache cleanup (source + wheelhouse never ship in the template)"
+qga "rm -f /etc/apt/sources.list.d/labloop-cache.list && \
+     rm -f /var/lib/apt/lists/*122.1.8777* /var/lib/apt/lists/*labloop-cache* 2>/dev/null; \
+     rm -rf /srv/lab/wheelhouse /tmp/uvx-wheels"
+
+# PASSWORD POLICY — the lab/exp password hash ships inside every clone
+# and inside any published image, where it can be cracked offline at
+# leisure. Rules:
+#   1. Use a SHORT, UNIQUE throwaway password — never reuse a real one.
+#   2. There is no sshd; login is console-only behind host auth, so a
+#      weak-but-unique password is acceptable FOR LOCAL LAB USE ONLY.
+#   3. LABLOOP_PUBLISH=1 locks both account passwords in the image —
+#      mandatory before distributing the qcow2 (e.g. Hugging Face).
+#      Clones of a locked image must set a password at first boot
+#      (or log in via a previously-authorized key/console autologin).
+if [ "${LABLOOP_PUBLISH:-0}" = "1" ]; then
+    note "PUBLISH mode: locking lab+exp+mcp passwords in the image"
+    qga "passwd -l lab && passwd -l exp && passwd -l mcp 2>/dev/null; \
+         passwd -S lab | grep -q ' L ' && passwd -S exp | grep -q ' L '"
+fi
+
+# ubiquity under automatic mode can leave no nvram 'ubuntu' entry and no
+# \EFI\BOOT\BOOTX64.EFI fallback — OVMF then drops to the UEFI shell on
+# every boot, INCLUDING the first boot of this build (agent never comes
+# up). --removable installs the fallback loader (covers this VM and any
+# clone, whose nvram may differ), efibootmgr -c restores the named entry.
+note "UEFI boot: ESP fallback loader + nvram entry"
+qga "grub-install --target=x86_64-efi --efi-directory=/boot/efi \
+     --removable --no-nvram"
+qga "efibootmgr -c -d /dev/vda -p 1 -L ubuntu \
+     -l '\EFI\ubuntu\shimx64.efi' 2>/dev/null \
+     || efibootmgr -c -d /dev/vda -p 1 -L ubuntu \
+        -l '\EFI\ubuntu\grubx64.efi' || true"
+
+note "shutdown"
+# the agent channel dies mid-poll when the guest powers off — expected
+qga "systemctl poweroff" 2>/dev/null || true
+for _ in $(seq 60); do
+    [ "$($VIRSH domstate "$VM" 2>/dev/null)" = "shut off" ] && break
+    sleep 5
+done
+[ "$($VIRSH domstate "$VM")" = "shut off" ] || die "$VM did not shut down"
+
+note "XML hardening: clipboard=off, native ${RES_X}x${RES_Y}"
+$VIRSH dumpxml --inactive "$VM" > "$WORK/dom.xml"
+python3 - "$WORK/dom.xml" "$RES_X" "$RES_Y" <<'PYEOF'
+import re, sys
+path, x, y = sys.argv[1], sys.argv[2], sys.argv[3]
+xml = open(path).read()
+# clipboard off inside the spice graphics element
+xml = re.sub(r"(<graphics type='spice'[^>]*>)",
+             r"\1\n      <clipboard copypaste='no'/>", xml, count=1)
+xml = xml.replace("<clipboard copypaste='yes'/>", "<clipboard copypaste='no'/>")
+# native resolution on the video model; qxl also gets VRAM sizing.
+# virtio is the default (no per-head TTM framebuffer to thrash —
+# QXL's [TTM] buffer-eviction wedge froze the desktop twice even
+# after vgamem was raised 32 -> 128 MiB); the qxl branch stays for
+# domains built before the switch.
+# NOTE: <model type='virtio'/> also appears on the NIC — search inside
+# the <video> block or the NIC eats the resolution and libvirt drops it.
+v = re.search(r"<video>.*?</video>", xml, re.S)
+if v:
+    seg = v.group(0)
+    m = re.search(r"<model type='qxl'[^>]*>", seg)
+    if m:
+        sized = re.sub(r"\bram='\d+'", "ram='262144'",
+            re.sub(r"\bvram='\d+'", "vram='131072'",
+            re.sub(r"\bvgamem='\d+'", "vgamem='131072'", m.group(0))))
+        seg = seg.replace(m.group(0), sized)
+    m = re.search(r"<model type='(?:virtio|qxl)'[^>]*>", seg)
+    if m and m.group(0).endswith("/>"):
+        seg = seg.replace(m.group(0),
+            m.group(0)[:-2] + ">\n"
+            f"        <resolution x='{x}' y='{y}'/>\n      </model>")
+    elif m and "<resolution" not in seg:
+        seg = seg.replace(m.group(0),
+            m.group(0) + "\n"
+            f"        <resolution x='{x}' y='{y}'/>\n")
+    xml = xml.replace(v.group(0), seg)
+open(path, "w").write(xml)
+PYEOF
+$VIRSH define "$WORK/dom.xml" >/dev/null
+
+# snp-vN: monotonic across BOTH naming eras — count pre-freeze-vN too
+next=$($VIRSH snapshot-list --name "$VM" | \
+       sed -n 's/^.*-\{0,1\}v\([0-9]\+\)$/\1/p' | sort -n | tail -1)
+snap="snp-v$(( ${next:-0} + 1 ))"
+$VIRSH snapshot-create-as "$VM" "$snap" "create-lab-template"
+
+cat <<EOF
+
+==> template '$VM' built, battery green, snapshotted as $snap.
+
+    Next:
+      sudo virt-sysprep -d $VM        # scrub machine-id/keys/hostname
+      ./create-lab-user <name>        # per-user clone
+
+    Revert point for future updates:
+      virsh snapshot-revert $VM $snap && virsh start $VM
+      (snapshot embeds the XML — re-snapshot after any host-side
+       XML change, or the revert resurrects the old config)
+
+    BEFORE PUBLISHING the image (Hugging Face etc.):
+      rebuild/freeze with LABLOOP_PUBLISH=1 — locks lab+exp
+      passwords inside the image. The hash is offline-crackable
+      by anyone who downloads it. Never ship a reused password.
+EOF

@@ -1,0 +1,244 @@
+#!/usr/bin/env bash
+# pre-commit — private-info / secret leak guard for this repository.
+#
+# Scans content about to be committed for things that must never reach the
+# public GitHub repo: private key material, API tokens, machine-local paths,
+# credential-bearing URIs, internal addresses, sensitive filenames, and
+# symlinks that escape the repository.
+#
+# Usage:
+#   (git hook, no args)   scan staged files — runs automatically on commit
+#   --all                 scan every file git would track (pre-push audit)
+#   --strict              treat WARN findings as failures too
+#
+# Suppress a false positive on a single line with a trailing marker:
+#   ... some line ...    # leakscan:ignore
+#
+# Install for a fresh clone:  git config --local core.hooksPath .githooks
+
+set -u
+
+MODE=staged
+STRICT=0
+for arg in "$@"; do
+    case "$arg" in
+        --all|--tree) MODE=all ;;
+        --strict) STRICT=1 ;;
+        -h|--help) sed -n '2,16p' "$0"; exit 0 ;;
+        *) echo "unknown argument: $arg" >&2; exit 2 ;;
+    esac
+done
+
+ROOT=$(git rev-parse --show-toplevel 2>/dev/null) || {
+    echo "pre-commit: not inside a git repository" >&2; exit 2; }
+cd "$ROOT" || exit 2
+
+SELF=".githooks/pre-commit"
+
+# ---------------------------------------------------------------- patterns --
+# Severity: BLOCK always fails the commit; WARN fails only under --strict.
+# Regexes are PCRE (grep -P), matched per line.
+
+declare -a P_SEV P_ID P_RE P_MSG
+pat() { P_SEV+=("$1"); P_ID+=("$2"); P_RE+=("$3"); P_MSG+=("$4"); }
+
+# --- credential formats (high confidence) ---
+pat BLOCK PRIV-KEY       '-----BEGIN (?:[A-Z0-9 ]+ )?PRIVATE KEY(?: BLOCK)?-----' \
+    'private key material'
+pat BLOCK AWS-KEY        '\b(?:AKIA|ASIA|ABIA|ACCA)[0-9A-Z]{16}\b' \
+    'AWS access key id'
+pat BLOCK AWS-SECRET     '(?i)aws_secret_access_key[[:space:]]*=[[:space:]]*[A-Za-z0-9/+=]{20,}' \
+    'AWS secret access key'
+pat BLOCK GH-TOKEN       '\b(?:ghp|gho|ghu|ghs|ghr|ghc)_[A-Za-z0-9]{20,}\b' \
+    'GitHub token'
+pat BLOCK GH-PAT         '\bgithub_pat_[A-Za-z0-9_]{22,}\b' \
+    'GitHub fine-grained PAT'
+pat BLOCK HF-TOKEN       '\bhf_[A-Za-z0-9]{30,}\b' \
+    'Hugging Face token'
+pat BLOCK AI-KEY         '\b(?:sk|pk|ant|rk)[-_](?:ant-|proj-|svcacct-|or-|live_|test_)?[A-Za-z0-9_-]{20,}\b' \
+    'API key (OpenAI/Anthropic/Stripe-style)'
+pat BLOCK SLACK-TOKEN    '\bxox[baprs]-[A-Za-z0-9-]{10,}\b' \
+    'Slack token'
+pat BLOCK GCP-KEY        '\bAIza[0-9A-Za-z_-]{35}\b' \
+    'Google API key'
+pat BLOCK NPM-TOKEN      '\bnpm_[A-Za-z0-9]{30,}\b' \
+    'npm token'
+pat BLOCK PYPI-TOKEN     '\bpypi-[A-Za-z0-9_-]{20,}\b' \
+    'PyPI token'
+pat BLOCK GITLAB-PAT     '\bglpat-[A-Za-z0-9_-]{20,}\b' \
+    'GitLab PAT'
+pat BLOCK JWT            '\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{4,}\b' \
+    'JSON web token'
+pat BLOCK URI-CREDS      '\b[a-z][a-z0-9+.-]*://[^\s/:@]{1,128}:[^\s/@]{2,}@' \
+    'username:password embedded in a URI'
+pat BLOCK SSHPASS        '\bsshpass[[:space:]]+-p[[:space:]]*\S+' \
+    'inline ssh password'
+pat BLOCK AUTH-HEADER    '(?i)authorization:[[:space:]]*(?:bearer|basic|token)[[:space:]]+[A-Za-z0-9._~+/=-]{12,}' \
+    'literal Authorization header'
+pat BLOCK ENV-SECRET     '(?i)\b(?:HF_TOKEN|HUGGINGFACE(?:_HUB)?_TOKEN|GITHUB_TOKEN|GH_TOKEN|GITLAB_TOKEN|OPENAI_API_KEY|ANTHROPIC_API_KEY|AWS_SESSION_TOKEN|CLOUDFLARE_API_TOKEN|DOCKER_PASSWORD|NPM_TOKEN|PYPI_TOKEN)[[:space:]]*=[[:space:]]*['"'"']?[A-Za-z0-9._~+/-]{8,}' \
+    'well-known secret env var with a literal value'
+
+# --- machine-local paths ---
+pat BLOCK HOME-PATH      '/home/(?!(?:lab|mcp|exp)\b)[A-Za-z0-9._~-]+' \
+    'host-local home path (only guest accounts /home/{lab,mcp,exp} are allowed)'
+pat BLOCK MAC-HOME       '/Users/[A-Za-z0-9._~-]+' \
+    'macOS user home path'
+pat BLOCK WIN-HOME       '[A-Za-z]:\\Users\\' \
+    'Windows user home path'
+
+# --- ambiguous (WARN) ---
+pat WARN GENERIC-SECRET  '(?i)\b(?:api[_-]?key|apikey|access[_-]?token|auth[_-]?token|secret[_-]?key|client[_-]?secret|passwd|password)[[:space:]]*[:=][[:space:]]*["'"'"'][^"'"'"']{8,}["'"'"']' \
+    'secret-looking quoted assignment (placeholder?)'
+pat WARN EMAIL           '[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}' \
+    'email address not on the public whitelist'
+pat WARN PRIVATE-IP      '\b(?:(?:10|127|169\.254|100\.(?:6[4-9]|[7-9][0-9]|1[0-1][0-9]|12[0-7]))\.\d{1,3}\.\d{1,3}|172\.(?:1[6-9]|2[0-9]|3[01])\.[0-9]{1,3}|192\.168\.[0-9]{1,3})\.\d{1,3}\b' \
+    'private/link-local IP not on the lab whitelist'
+pat WARN SESSION-PATH    '/run/user/[0-9]+|/var/folders/|/private/var/folders/' \
+    'session-specific runtime path'
+
+# Whitelists applied after a WARN regex hits.
+EMAIL_OK='@cloudcell\.nz$|@users\.noreply\.github\.com$|@example\.(com|org|net)$|@localhost$|noreply|@<|\$\{|\$\('
+IP_OK='^(?:127\.|0\.0\.0\.0$|255\.255|169\.254\.|192\.168\.122\.|172\.30\.0\.|172\.31\.0\.|10\.0\.0\.0$|172\.16\.0\.0$|192\.168\.0\.0$|100\.64\.0\.0$)'
+PLACEHOLDER_RE='(?i)(xxx|\.\.\.|changeme|change[ -]?me|placeholder|redacted|example|sample|dummy|fake|your[-_]|<|\$\{|\$\(|password$|^api[-_]?key$|^token$)'
+
+# ------------------------------------------------------ filename blacklist --
+# Returns "SEV message" on stdout for a sensitive path, nothing if clean.
+check_name() {
+    local f="$1" base
+    base=${f##*/}
+    local lb=${base,,} lf=${f,,}
+    case "$lf" in
+        .ssh/*|*/.ssh/*|.aws/*|*/.aws/*|.gnupg/*|*/.gnupg/*|.docker/config.json|*/.docker/config.json)
+            echo "BLOCK sensitive dot-directory file"; return ;;
+    esac
+    case "$lb" in
+        .env|.env.*)
+            case "$lb" in
+                *.example|*.sample|*.template|*.dist) ;; # templates are fine
+                *) echo "BLOCK environment file ($lb)"; return ;;
+            esac ;;
+        .envrc|.npmrc|.pypirc|.netrc|.git-credentials|.netrc.gpg)
+            echo "BLOCK credential-bearing dotfile"; return ;;
+        id_rsa|id_dsa|id_ecdsa|id_ed25519)
+            echo "BLOCK ssh private key"; return ;;
+        *.pem|*.key|*.p12|*.pfx|*.ppk|*.jks|*.keystore|*.kdbx|*.ovpn|*.gpg|*.sec)
+            echo "BLOCK key/credential container ($lb)"; return ;;
+        *.kubeconfig|kubeconfig|credentials|*.credentials|secrets.yml|secrets.yaml|secrets.json|secrets.env|secrets.txt)
+            echo "BLOCK credentials/secrets file"; return ;;
+        .bash_history|.zsh_history|.python_history|.psql_history|.mysql_history|.sqlite_history|.lesshst|.viminfo|.wget-hsts)
+            echo "BLOCK shell/editor history (leaks paths and commands)"; return ;;
+        authorized_keys|known_hosts|*.asc)
+            echo "WARN ssh/pgp public material or host list"; return ;;
+        .ds_store|thumbs.db|desktop.ini|*.swp|*.swo|*.kate-swp)
+            echo "WARN OS/editor metadata file"; return ;;
+        *secret*|*credential*)
+            echo "WARN filename suggests secrets"; return ;;
+    esac
+}
+
+# ------------------------------------------------------------------ engine --
+BLOCKS=0
+WARNS=0
+
+hit() { # sev file line id msg text
+    local sev="$1" f="$2" n="$3" id="$4" msg="$5" text="$6"
+    [ ${#text} -gt 160 ] && text="${text:0:157}..."
+    if [ "$sev" = BLOCK ]; then BLOCKS=$((BLOCKS+1)); else WARNS=$((WARNS+1)); fi
+    printf '%s  %s:%s  [%s] %s\n      %s\n' "$sev" "$f" "$n" "$id" "$msg" "$text"
+}
+
+scan_file() { # path ; content on stdin already captured by caller
+    local f="$1" content="$2" i matched line keep em ip val
+    for i in "${!P_RE[@]}"; do
+        while IFS= read -r matched; do
+            line=${matched#*:}
+            case "$line" in *leakscan:ignore*) continue ;; esac
+            keep=1
+            case "${P_ID[$i]}" in
+                EMAIL)
+                    keep=0
+                    while IFS= read -r em; do
+                        printf '%s' "$em" | grep -qP "$EMAIL_OK" || keep=1
+                    done < <(printf '%s\n' "$line" | grep -oP '[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}') ;;
+                PRIVATE-IP)
+                    keep=0
+                    while IFS= read -r ip; do
+                        printf '%s' "$ip" | grep -qP "$IP_OK" || keep=1
+                    done < <(printf '%s\n' "$line" | grep -oP "${P_RE[$i]}") ;;
+                GENERIC-SECRET|ENV-SECRET)
+                    val=$(printf '%s\n' "$line" | grep -oP '(?i)[:=][[:space:]]*["'"'"']?[^"'"'"'[:space:]]+' | tail -1 | tr -d "\"'=")
+                    [ -n "$val" ] && printf '%s' "$val" | grep -qP "$PLACEHOLDER_RE" && keep=0 ;;
+            esac
+            [ "$keep" = 1 ] && hit "${P_SEV[$i]}" "$f" "${matched%%:*}" "${P_ID[$i]}" "${P_MSG[$i]}" "$line"
+        done < <(printf '%s\n' "$content" | grep -nP -- "${P_RE[$i]}" 2>/dev/null)
+    done
+}
+
+examine() { # path — name checks + content scan + symlink escape check
+    local f="$1" res target dest content
+    res=$(check_name "$f") && [ -n "$res" ] && hit "${res%% *}" "$f" "-" "FILENAME" "${res#* }" "$f"
+
+    if [ "$MODE" = all ]; then
+        if [ -L "$f" ]; then
+            target=$(readlink "$f")
+            case "$target" in
+                /*) hit BLOCK "$f" "-" "SYMLINK" "absolute symlink target" "-> $target" ;;
+                *) dest=$(realpath -m -- "$ROOT/$(dirname "$f")/$target")
+                   case "$dest" in
+                       "$ROOT"|"$ROOT"/*) ;;
+                       *) hit BLOCK "$f" "-" "SYMLINK" "symlink escapes the repository" "-> $target" ;;
+                   esac ;;
+            esac
+            return
+        fi
+        [ -f "$f" ] || return
+        head -c 8192 "$f" | grep -qI . || return   # binary
+        content=$(cat "$f")
+    else
+        # staged blob — mode 120000 means symlink
+        local meta
+        meta=$(git ls-files -s -- "$f" | awk '{print $1" "$2}')
+        case "$meta" in
+            120000*)
+                target=$(git cat-file -p "${meta#* }" 2>/dev/null)
+                case "$target" in
+                    /*) hit BLOCK "$f" "-" "SYMLINK" "absolute symlink target" "-> $target" ;;
+                    *) dest=$(realpath -m -- "$ROOT/$(dirname "$f")/$target")
+                       case "$dest" in
+                           "$ROOT"|"$ROOT"/*) ;;
+                           *) hit BLOCK "$f" "-" "SYMLINK" "symlink escapes the repository" "-> $target" ;;
+                       esac ;;
+                esac
+                return ;;
+        esac
+        git show ":$f" 2>/dev/null | head -c 8192 | grep -qI . || return
+        content=$(git show ":$f" 2>/dev/null) || return
+    fi
+    scan_file "$f" "$content"
+}
+
+if [ "$MODE" = all ]; then
+    while IFS= read -r -d '' f; do
+        [ "$f" = "$SELF" ] && continue
+        examine "$f"
+    done < <(git ls-files -c -o --exclude-standard -z)
+else
+    while IFS= read -r -d '' f; do
+        [ "$f" = "$SELF" ] && continue
+        examine "$f"
+    done < <(git diff --cached --name-only -z --diff-filter=ACMRT)
+fi
+
+# ------------------------------------------------------------------ report --
+echo "--------------------------------------------------------------------"
+printf 'leak scan (%s): %d block, %d warn%s\n' "$MODE" "$BLOCKS" "$WARNS" \
+    "$([ "$STRICT" = 1 ] && echo ' [strict]')"
+
+if [ "$BLOCKS" -gt 0 ] || { [ "$STRICT" = 1 ] && [ "$WARNS" -gt 0 ]; }; then
+    cat >&2 <<'EOF'
+Commit blocked. Remove the private material, move it into untracked config,
+or — for a verified false positive — append `# leakscan:ignore` to that line.
+EOF
+    exit 1
+fi
+exit 0

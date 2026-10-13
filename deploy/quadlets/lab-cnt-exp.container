@@ -1,0 +1,68 @@
+# Quadlet — hostile zone. Install for user `exp`:
+#   ~exp/.config/containers/systemd/lab-cnt-exp.container
+#   systemctl --user daemon-reload && systemctl --user start lab-cnt-exp
+# Requires: lab-net-exp exists in exp's podman, lab-img-exp image built.
+[Unit]
+Description=labloop hostile zone - experiment sandbox
+
+[Container]
+Image=lab-img-exp
+ContainerName=lab-cnt-exp
+Network=lab-net-exp
+# keep-id: container `exp` = host `exp`, so the rw mounts below are
+# writable. `auto` would map uid 1000 to an unrelated subuid and
+# silently break /exchange + /experiments writes.
+UserNS=keep-id
+# catatonit as PID 1: reaps orphaned exec children. Without it the
+# container's `sleep infinity` init never reaps — every orphan leaves
+# a permanent zombie charged against pids.max until the cgroup wedges
+# (observed: 510 zombies, every exec then fails with silent exit 254).
+RunInit=true
+DropCapability=all
+NoNewPrivileges=true
+ReadOnly=true
+Tmpfs=/tmp:rw,noexec,nosuid,size=2g
+# writable scratch HOME — uv caches, tlmgr usertree (~/texmf) and
+# tools need *some* writable dir; the rootfs stays read-only and the
+# mount is per-boot volatile. mode=1777 is required — a default tmpfs
+# is root-owned and uid 1001 (the keep-id exec target) can't mkdir in
+# it (observed: tlmgr init-usertree -> Permission denied)
+Tmpfs=/home/exp:rw,nosuid,size=1g,mode=1777
+Volume=/srv/lab/workspace:/workspace:ro
+# ingested datasets — read-only like workspace: experiments consume
+# them but cannot tamper; each batch is a UTC-timestamped dir landed
+# by 80-ingest-lab-data.sh
+Volume=/srv/lab/incoming:/incoming:ro
+Volume=/srv/lab/exchange:/exchange:rw
+Volume=/srv/lab/experiments:/experiments:rw
+# persistent opt-in install area for agent-built tools (compiles,
+# static binaries, tarballs): a named volume so it survives image
+# rebuilds and stays out of the read-only rootfs
+Volume=labloop-opt:/opt/local
+# Resource ceiling — sized to leave the DRIVER/TRUSTED zones alive
+# under a hostile-zone CPU storm, not to throttle normal work.
+# @EXP_CPUS@ / @EXP_MEM_MIB@ are rendered at install time (create-
+# lab-template and 30-ensure-lab-tools.sh) to ~5/8 of the guest's
+# vcpus and ~3/4 of its RAM — the desktop keeps headroom even when
+# the hostile zone saturates (observed: load 58 + TTM buffer-
+# eviction failures + hard freeze on an uncapped storm).
+#   --cpu-shares 512: under contention exp yields to default-weight
+#     host tasks (1024); gets full quota when the box is idle
+#   --pids-limit 512: bounds fork/thread-bomb blast radius
+PodmanArgs=--cpus @EXP_CPUS@ --cpu-shares 512 --pids-limit 512 --memory @EXP_MEM_MIB@m
+
+[Service]
+Restart=always
+# a stopped container exits 143 (SIGTERM) or 137 (SIGKILL after the
+# stop timeout — hostile experiments may ignore TERM); conmon
+# propagates it as the unit's main-process status. Without this,
+# every stop/restart marks the service failed and Restart=always
+# churns (observed on pub-6: ~183 failure lines per boot cluster).
+SuccessExitStatus=0 137 143
+# keep-id triggers storage-chown-by-maps on first start after a big
+# image rebuild — ~4 GB texlive-full takes minutes, and the default
+# 90s kill mid-chown leaves the loop worse each time
+TimeoutStartSec=900
+
+[Install]
+WantedBy=default.target

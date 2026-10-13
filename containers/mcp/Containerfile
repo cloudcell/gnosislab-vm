@@ -1,0 +1,92 @@
+# Trusted zone — all five ml-* MCP servers as separate processes in one
+# deployment unit, installed from the official `gnosislab` PyPI package
+# (pinned). ADR-0001's one-server-per-loop is preserved at the process
+# level; the container is packaging, not a security boundary — the VM
+# is the boundary (docs/sb-architecture/sb-01-secure-encapsulation.md).
+#
+# The wheel ships code + console scripts only; the config payload
+# (ports.env, ml-*.toml) ships in the sdist. A build context carries
+# both:
+#
+#   ctx/
+#     Containerfile
+#     entrypoint.sh
+#     pkgs/
+#       wheels/            gnosislab==X wheel closure (offline installs)
+#       gnosislab/         ports.env + ml-*.toml (+ diagnostics/)
+#
+#   podman build -t lab-img-mcp \
+#       --build-arg GNOSISLAB_VERSION=0.1.42 --build-arg OFFLINE=1 ctx
+#
+# OFFLINE=0 (default) fetches from PyPI inside the build instead —
+# the manual/dev path; the lab pipeline always builds OFFLINE=1
+# against prefetched, manifest-hashed artifacts.
+#
+# KNOWN GAP: the ml-* servers do not yet enforce bearer-token auth —
+# the Authorization header in Cline's config is currently inert.
+# Isolation rests on network separation (loopback publish + lab-net-mcp)
+# until auth lands server-side or behind an authenticating proxy.
+FROM docker.io/library/python:3.12-slim
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        bubblewrap strace curl ca-certificates git \
+    && rm -rf /var/lib/apt/lists/*
+
+ARG GNOSISLAB_VERSION
+ARG OFFLINE=0
+RUN [ -n "$GNOSISLAB_VERSION" ] || { echo "GNOSISLAB_VERSION build-arg required" >&2; exit 1; }
+
+COPY pkgs/ /pkgs/
+
+# uv stays: trial-env creation runs `podman run --entrypoint uv` on
+# this image, and `uv pip --system` is the installer for both modes.
+# Its wheel is part of the gnosislab wheelhouse so OFFLINE=1 stays
+# hermetic (a VM without egress can still rebuild in-guest).
+RUN if [ "$OFFLINE" = "1" ]; then \
+        pip install --no-cache-dir --no-index --find-links=/pkgs/wheels uv; \
+    else \
+        pip install --no-cache-dir uv; \
+    fi
+
+RUN if [ "$OFFLINE" = "1" ]; then \
+        uv pip install --system --no-index --find-links=/pkgs/wheels \
+            "gnosislab==$GNOSISLAB_VERSION" && \
+        install -d /opt/gnosislab && \
+        cp /pkgs/gnosislab/ports.env /pkgs/gnosislab/ml-*.toml /opt/gnosislab/; \
+    else \
+        uv pip install --system "gnosislab==$GNOSISLAB_VERSION" && \
+        curl -fsSL "https://pypi.org/packages/source/g/gnosislab/gnosislab-${GNOSISLAB_VERSION}.tar.gz" \
+            | tar -xz -C /tmp && \
+        install -d /opt/gnosislab && \
+        cp /tmp/gnosislab-${GNOSISLAB_VERSION}/ports.env \
+           /tmp/gnosislab-${GNOSISLAB_VERSION}/ml-*.toml /opt/gnosislab/ && \
+        rm -rf /tmp/gnosislab-${GNOSISLAB_VERSION}; \
+    fi
+
+# Empty dirs do not ship in wheels: every server's observability app
+# mounts StaticFiles on a dir that is empty upstream and therefore
+# absent in the installed package. Create defensively for the four
+# whose upstream dirs are empty (agora's ships pixi.min.js).
+# NB: RUN is /bin/sh (dash) — no brace expansion.
+RUN for s in arete zetesis episteme anamnesis; do \
+        mkdir -p "/usr/local/lib/python3.12/site-packages/ml_${s}_mcp/observability/static"; \
+    done
+
+# Build stamp — a pinned release is clean by definition; rev records
+# the artifact, not a git commit. _build_stamp() finds this via its
+# __file__.parents walk (site-packages is a parent of every installed
+# module).
+RUN printf '{"rev": "pypi:gnosislab==%s", "dirty": false}\n' \
+        "$GNOSISLAB_VERSION" \
+        > /usr/local/lib/python3.12/site-packages/BUILD_REV
+
+WORKDIR /opt/gnosislab
+
+COPY entrypoint.sh /usr/local/bin/labloop-mcp
+RUN chmod 755 /usr/local/bin/labloop-mcp
+
+# Durable state under one mount: servers write ~/.ml-<name>/.
+ENV HOME=/state
+VOLUME ["/state"]
+
+ENTRYPOINT ["/usr/local/bin/labloop-mcp"]

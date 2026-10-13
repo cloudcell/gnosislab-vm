@@ -1,0 +1,34 @@
+GnosisLab
+
+Copyright © 2026 Cloudcell Limited and contributors.
+
+GnosisLab is the public distribution of two sibling components:
+
+    gnosislab-vm/     the KVM isolation harness (VM template builder)
+    gnosislab/        the ml-* MCP experimentation servers
+
+Both components are distributed under the Apache License 2.0 unless otherwise
+stated. Each directory carries its own LICENSE, NOTICE, and legal/ files.
+
+Third-party components included or installed by this distribution remain
+under their own licenses. See:
+
+    gnosislab-vm/legal/THIRD-PARTY-NOTICES.md
+    gnosislab/legal/THIRD-PARTY-NOTICES.md
+
+The name "GnosisLab" is a trademark or potential trademark of
+Alexander Bikeyev. The software license does not grant trademark rights.
+See:
+
+    gnosislab-vm/legal/TRADEMARKS.md
+
+Cloudcell Limited may distribute, maintain, or provide commercial services
+related to GnosisLab with permission from the trademark owner.
+
+This software is provided "as is", without warranty of any kind. No
+guarantee of reliability, security, or suitability for any particular
+purpose is made or implied. Read the LICENSE file (Apache License 2.0)
+for the full terms before use.
+
+This notice is provided for attribution, licensing, and trademark clarity.
+It does not modify the terms of the applicable software licenses.
