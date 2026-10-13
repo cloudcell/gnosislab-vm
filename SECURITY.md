@@ -38,7 +38,15 @@ project reaches stable releases.
 
 Please do not report security vulnerabilities through public GitHub issues.
 
-Report suspected vulnerabilities by email:
+**Preferred channel — GitHub private vulnerability reporting:**
+
+[Report a vulnerability privately](https://github.com/cloudcell/gnosislab-vm/security/advisories/new)
+
+This opens a private security advisory visible only to the maintainers and
+you — no email address is exposed, and discussion, fixes, and credit can be
+coordinated inside the advisory before any disclosure.
+
+Fallback channel — if the private form is unavailable, email:
 
 ```text
 alex@cloudcell.nz
