@@ -9,7 +9,9 @@ what the documented escalation path is for each gap.
 
 Reference baselines: **NIST SP 800-190** (container security),
 **CIS Docker Benchmark**, **NIST SP 800-53** (AC-6 least privilege,
-AU-6 audit), and the practices of production agent-sandbox systems
+AU-6 audit) — the NIST publications are vendored locally under
+[`docs-pub/reference/`](../docs-pub/reference/README.md) — and the
+practices of production agent-sandbox systems
 (microVM platforms, code-execution sandboxes, sandbox runtimes).
 
 ## 1. Controls that meet or exceed the standard

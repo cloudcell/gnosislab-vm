@@ -4,9 +4,9 @@ GnosisLab-VM includes third-party components that are licensed separately from
 GnosisLab-VM. These components remain under their respective licenses.
 
 Unless otherwise stated, original GnosisLab-VM code and documentation are
-licensed under the Apache License 2.0. Third-party components are not relicensed under
-the GnosisLab-VM Apache-2.0 license. They are included, distributed, or referenced under
-the terms of their own licenses.
+licensed under the Apache License 2.0. Third-party components are not
+relicensed under the GnosisLab-VM Apache-2.0 license. They are included,
+distributed, or referenced under the terms of their own licenses.
 
 This file is provided for attribution and license-notice purposes. It is not a
 substitute for the full license texts included with each third-party component.
@@ -57,3 +57,21 @@ each under its own license.
 
 Any third-party fonts, icons, or similar assets vendored directly into this
 repository carry their own license files alongside the asset.
+
+## Vendored reference documents
+
+`docs-pub/reference/` ships local copies of external security standards cited
+by `deploy/SECURITY-COMPLIANCE-NOTE.md`:
+
+- **NIST SP 800-190**, *Application Container Security Guide* (2017)
+- **NIST SP 800-53 Rev. 5**, *Security and Privacy Controls for Information
+  Systems and Organizations* (2020)
+
+Both are works of the United States federal government and are therefore in
+the **public domain** (17 U.S.C. §105). No license terms apply; redistribution
+is unrestricted. Source URLs and retrieval date are recorded in
+`docs-pub/reference/README.md`.
+
+The **CIS Docker Benchmark** is deliberately *not* vendored: it is distributed
+under a CIS license that prohibits redistribution, and is referenced by link
+only.
