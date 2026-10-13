@@ -1,5 +1,26 @@
 # Security Policy
 
+## Standards basis
+
+The isolation design, zone rules, and security controls in this project are
+informed by published industry standards and practice, including:
+
+- **NIST SP 800-190** — application container security
+- **NIST SP 800-53 Rev. 5** — least privilege (AC-6), audit (AU-6)
+- **CIS Docker Benchmark** — container hardening conventions
+- production agent-sandbox practice (microVM platforms, code-execution
+  sandboxes)
+
+Local copies of the NIST publications are vendored in
+[`docs-pub/reference/`](docs-pub/reference/README.md) (public-domain US
+government works). A control-by-control mapping of this project's
+implementation against those baselines — including the deliberate gaps and
+their escalation paths — is recorded in
+[`deploy/SECURITY-COMPLIANCE-NOTE.md`](deploy/SECURITY-COMPLIANCE-NOTE.md).
+
+This policy describes how vulnerabilities are handled; it does not imply that
+the controls are perfect. See [No Warranty](#no-warranty).
+
 ## Supported Versions
 
 GnosisLab-VM is currently alpha software.
