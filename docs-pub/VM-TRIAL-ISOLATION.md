@@ -1,9 +1,9 @@
 # Feature 7B: Trial-process isolation (release-gated)
 
-**Status:** VM integration prepared, but DO NOT merge or deploy until the
-core GnosisLab executor patch is released, pinned, and validated in a
-disposable VM clone. The current VM pin is `gnosislab==0.1.42` and does
-not support this protection.
+**Status:** Core isolation was merged and published in GnosisLab 0.1.45.
+This VM integration remains release-gated pending verification in a disposable
+VM clone. The builder defaults to the latest PyPI release; set
+`GNOSISLAB_VER=0.1.45` explicitly for a reproducible acceptance test.
 
 ## Boundary
 
@@ -11,7 +11,7 @@ Episteme launches potentially hostile trials inside the MCP container.
 The trusted container also holds scientific SQLite databases, ingest
 credentials, and logs under `/state`.
 
-The core GnosisLab change proposed in
+The core GnosisLab change merged through
 [cloudcell/gnosislab#6](https://github.com/cloudcell/gnosislab/pull/6)
 introduces an opt-in `ML_EPISTEME_TRIAL_ISOLATION=enforced` mode:
 
@@ -29,9 +29,9 @@ unisolated Episteme server.
 
 ## Release dependency and operational trade-off
 
-1. Merge and publish a properly versioned GnosisLab release with the
-   isolation patch, after upstream tests pass.
-2. Update the GnosisLab version pinned by `create-lab-template`.
+1. Verify the GnosisLab 0.1.45 PyPI release includes the isolation patch.
+2. Select that exact version with `GNOSISLAB_VER=0.1.45` for the test,
+   rather than relying on `latest` during the validation run.
 3. Rebuild the MCP container image (not necessarily the whole golden VM).
 4. Exercise real trial launch, artifact capture, denial of access to
    `/state` and network access, and legitimate data processing in a
