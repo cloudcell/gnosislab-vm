@@ -89,15 +89,19 @@ def main():
         try:
             existing = json.loads(old)
         except json.JSONDecodeError:
-            if old.strip():
-                parser.exit(1, f"{args.file} contains commented JSONC. Back it up/migrate "
-                            "manually before running the configurator.\n")
-        else:
-            providers = existing.get("provider", {})
-            providers.pop("vllm", None)  # retire the legacy fixed endpoint
-            providers.update(config["provider"])
-            existing["provider"] = providers
-            config = existing
+            # Migrate the exact legacy bundled provider; don't erase custom JSONC.
+            if ('"Local vLLM (host)"' in old and
+                    '"http://192.168.122.1:8002/v1"' in old and
+                    '"models": {}' in old):
+                existing = {"$schema": "https://opencode.ai/config.json", "provider": {}}
+            else:
+                parser.exit(1, f"{args.file} contains custom commented JSONC; "
+                            "back it up and migrate manually.\\n")
+        providers = existing.get("provider", {})
+        providers.pop("vllm", None)
+        providers.update(config["provider"])
+        existing["provider"] = providers
+        config = existing
     tmp = args.file.with_name(args.file.name + ".new")
     tmp.write_text(json.dumps(config, indent=2) + "\n")
     tmp.chmod(0o600)
