@@ -2,6 +2,67 @@
 
 GnosisLab-VM images are **built on the publisher's local KVM/libvirt machine**, not GitHub runners. The automated GitHub attestation is a cryptographically signed **publication declaration** associating a VM image digest with the Cloudcell GitHub repository. It **does not** independently prove the host ran an unmodified build, assert reproducibility, or meet SLSA Build Level 3.
 
+## Signed provenance manifest
+
+Each newly published image has three companion records:
+
+- `<image>.qcow2`: the actual compressed VM disk
+- `<image>.qcow2.sha256`: its SHA-256 checksum
+- `<image>.qcow2.provenance.json`: readable structured publication metadata
+
+The JSON includes GnosisLab version, its evidence source, the image and
+checksum digests, the publisher checkout commit, the template builder commit
+(when a successfully completed build recorded it), and the identity of
+the GitHub OIDC/Sigstore signing workflow. The repository is the signer
+identity; the workflow authenticates **publication claims**, not an
+independently reproduced KVM build.
+
+**The JSON itself is a third subject in GitHub's signed attestation.**
+Changing its version, source commit or SHA-256 after signing breaks
+cryptographic verification. Old attestations with only two subjects do
+not validate the new manifest.
+
+New template builds save `dist/<template>.build-info.json`, containing
+the resolved GnosisLab package version and the source commit used at the
+end of a successful build. The publishing script takes that value,
+preserving the distinction between `templateBuildCommit` and
+`publisherCheckoutCommit`. If the build record is missing, official
+publication stops unless the publisher explicitly supplies
+`GNOSISLAB_VER=X.Y.Z`; such versions are labelled `publisher-declared`.
+
+To validate all three files after downloading:
+
+```bash
+sha256sum -c image.qcow2.sha256
+python3 scripts/vm_publication_attestation.py verify image.qcow2.sha256 \
+  --provenance image.qcow2.provenance.json
+```
+
+### Backfill the already released October 14 image
+
+The file `lab-template-20261014T0456Z-20261014T0539Z.qcow2` was
+published before this feature. **Do not download, reseal or reupload the
+7.18 GB disk.** Its existing local copy, checksum and release bucket
+are sufficient. On the trusted physical host, after merging this feature:
+
+```bash
+git switch master && git pull --ff-only
+IMAGE=dist/lab-template-20261014T0456Z-20261014T0539Z.qcow2
+sha256sum -c "$IMAGE.sha256"
+python3 scripts/vm_publication_attestation.py provenance-create \
+  "$IMAGE.sha256" --gnosislab-version 0.1.45
+python3 scripts/vm_publication_attestation.py request \
+  "$IMAGE" "$IMAGE.sha256" --provenance "$IMAGE.provenance.json"
+hf buckets cp "$IMAGE.provenance.json" \
+  "hf://buckets/cloudcell/LabLoop/$(basename "$IMAGE").provenance.json"
+```
+
+The historical version is explicitly *publisher-declared*, because
+the original completed build did not record version metadata for this
+feature. The new signed record binds the exact existing image digest
+and the new JSON, without modifying the previously released QCOW2.
+
+**There is no need to re-upload the existing QCOW2 or checksum.**
 ## Automated official publication
 
 After the existing local build, the standard pipeline is:
@@ -10,7 +71,7 @@ After the existing local build, the standard pipeline is:
 2. The publisher requests a `workflow_dispatch` on `.github/workflows/attest-vm-publication.yml` with the exact image SHA-256, checksum-file SHA-256, local publishing Git commit and its dirty flag. **No VM bytes are sent to GitHub.**
 3. GitHub's `actions/attest` obtains a short-lived OIDC-based Sigstore certificate and signs a custom in-toto predicate. Its subjects are the VM digest **and** checksum sidecar digest. GitHub stores the attestation on this repository.
 4. The local uploader watches the **specific returned workflow run ID**, verifies its successful completion, independently runs `gh attestation verify` against the local checksum file with the repository, signer workflow and predicate constrained, and compares both subject hashes and declared commit. If any check fails, the image is **not uploaded**.
-5. `./11-release-template.sh` downloads **only the small checksum sidecar** from the private HF trials bucket, verifies its signed declaration and associated image digest, then copies the VM and checksum to the public release bucket. The official destination always requires verification and refuses unsigned releases.
+5. `./11-release-template.sh` downloads **only the small checksum sidecar** from the private HF trials bucket, verifies its signed declaration, including the provenance digest, and associated image digest, then copies the VM, checksum and signed JSON provenance to the public release bucket. The official destination always requires verification and refuses unsigned releases.
 
 Prerequisites for an official publisher:
 
