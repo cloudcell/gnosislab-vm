@@ -19,6 +19,37 @@ Prerequisites for an official publisher:
 - Python 3 on the publisher.
 - No long-lived artifact signing key. A GitHub authorization token is still required for dispatch, but it is not a signing key and is **not** shared with independent builders.
 
+## Recover an already-built image after a GitHub CLI error
+
+If publication stopped after image compression and checksum verification,
+the QCOW2 and its `.sha256` sidecar remain in `dist/`. Do **not**
+rebuild or reseal the VM. The GitHub signing workflow may already have
+succeeded although an old local `gh` cannot verify its attestation.
+
+1. Upgrade GitHub CLI from https://cli.github.com/ and check:
+   `gh attestation verify --help`.
+2. Verify the previously generated image and checksum locally.
+3. Resume the upload from exactly those existing files:
+
+```bash
+bash scripts/resume-vm-trial-upload.sh \
+  dist/lab-template-20261014T0456Z-20261014T0520Z.qcow2
+```
+
+The helper checks both the local SHA-256 checksum and the previously
+signed GitHub publication statement before asking to upload. It does
+not create a new signature, reseal a template or recompress an image.
+
+If the earlier attestation workflow did not succeed, sign the existing
+QCOW2 and sidecar without rebuilding:
+
+```bash
+python3 scripts/vm_publication_attestation.py request \
+  dist/your-image.qcow2 dist/your-image.qcow2.sha256
+```
+
+Then rerun the resume helper. Do not use `VM_ATTESTATION=skip` to
+publish an official Cloudcell image; that bypasses signing checks.
 ## Independent and community builders
 
 **Local VM creation, cloning, export and import need no Cloudcell GitHub access.**
