@@ -339,8 +339,11 @@ print(next((u["url"] for u in json.load(sys.stdin)["urls"]
     rm -rf "$CACHE/pkgs/gnosislab"; mkdir -p "$CACHE/pkgs/gnosislab"
     cp "$gx"/gnosislab-*/ports.env "$gx"/gnosislab-*/ml-*.toml \
         "$CACHE/pkgs/gnosislab/"
-    [ ! -d "$gx"/gnosislab-*/diagnostics ] \
-        || cp -a "$gx"/gnosislab-*/diagnostics "$CACHE/pkgs/gnosislab/"
+    local diagnostics
+    for diagnostics in "$gx"/gnosislab-*/diagnostics; do
+        [ -d "$diagnostics" ] || continue
+        cp -a "$diagnostics" "$CACHE/pkgs/gnosislab/"
+    done
     rm -rf "$gx"
     have_pkgs || die "pkgs layer incomplete"
 }
