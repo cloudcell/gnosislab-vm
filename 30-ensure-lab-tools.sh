@@ -251,8 +251,11 @@ ensure_vm() {
     # Source comes from the trusted host checkout via guest-agent, NEVER
     # from the driver-owned in-guest workspace. The files are installed
     # as root and checked before any mcp service restart.
-    qga_push "$vm" "$REPO/containers/mcp/entrypoint.sh" /tmp/ensure-entrypoint.sh
-    qga_push "$vm" "$REPO/deploy/seccomp-labloop.json" /tmp/ensure-seccomp.json
+    # Stage root-only, without trusting agent-writable /tmp paths.
+    qga_exec "$vm" "install -d -m 0755 -o root -g root /etc/labloop /usr/local/libexec" \
+        || { echo "  FAIL: trusted staging directories"; return 1; }
+    qga_push "$vm" "$REPO/containers/mcp/entrypoint.sh" /usr/local/libexec/.labloop-mcp-next
+    qga_push "$vm" "$REPO/deploy/seccomp-labloop.json" /etc/labloop/.seccomp-next
     if [ "$have_ports" = 1 ]; then
         printf '%s\n' 'Volume=/usr/local/libexec/labloop-mcp-entrypoint:/usr/local/bin/labloop-mcp:ro' \
             > "$WORK/mcp-entrypoint.mount"
@@ -311,8 +314,8 @@ ensure_vm() {
     fi
     # These protected assets must exist, be owned by root and match
     # this host checkout. Existing workspace files are never executed.
-    local entry_cmp="cmp -s /tmp/ensure-entrypoint.sh /usr/local/libexec/labloop-mcp-entrypoint && test \$(stat -c '%u:%a' /usr/local/libexec/labloop-mcp-entrypoint 2>/dev/null) = 0:755"
-    local seccomp_cmp="cmp -s /tmp/ensure-seccomp.json /etc/labloop/seccomp-labloop.json && test \$(stat -c '%u:%a' /etc/labloop/seccomp-labloop.json 2>/dev/null) = 0:644"
+    local entry_cmp="cmp -s /usr/local/libexec/.labloop-mcp-next /usr/local/libexec/labloop-mcp-entrypoint && test \$(stat -c '%u:%a' /usr/local/libexec/labloop-mcp-entrypoint 2>/dev/null) = 0:755"
+    local seccomp_cmp="cmp -s /etc/labloop/.seccomp-next /etc/labloop/seccomp-labloop.json && test \$(stat -c '%u:%a' /etc/labloop/seccomp-labloop.json 2>/dev/null) = 0:644"
     local need=0
     qga_exec "$vm" "
         cmp -s /tmp/ensure-labloop-export /usr/local/sbin/labloop-export &&
@@ -385,8 +388,8 @@ ensure_vm() {
         install -m 0440 -o root -g root /tmp/ensure-labloop.sudoers /etc/sudoers.d/labloop &&
         install -m 0644 -o root -g root /tmp/ensure-labloop-tmpfiles.conf /etc/tmpfiles.d/labloop.conf &&
         install -d -m 0755 -o root -g root /etc/labloop /usr/local/libexec &&
-        install -m 0755 -o root -g root /tmp/ensure-entrypoint.sh /usr/local/libexec/labloop-mcp-entrypoint &&
-        install -m 0644 -o root -g root /tmp/ensure-seccomp.json /etc/labloop/seccomp-labloop.json &&
+        install -m 0755 -o root -g root /usr/local/libexec/.labloop-mcp-next /usr/local/libexec/labloop-mcp-entrypoint &&
+        install -m 0644 -o root -g root /etc/labloop/.seccomp-next /etc/labloop/seccomp-labloop.json &&
         install -m 0644 -o root -g root /tmp/ensure-display.conf \
             /etc/labloop/display.conf &&
         install -m 0755 -o root -g root /tmp/ensure-labloop-display.sh \
