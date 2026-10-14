@@ -4,7 +4,7 @@
 
 [GnosisLab-VM](https://github.com/cloudcell/gnosislab-vm) is an optional VM-based environment for [GnosisLab](https://github.com/cloudcell/gnosislab), which supplies scientific research-process services. It combines a complete Linux research desktop with a KVM host boundary and distinct *driver*, *trusted scientific service*, and *untrusted experiment* zones. Most alternatives below concentrate on isolating agents or providing programmable execution infrastructure. They can be complementary to, rather than replacements for, the scientific runtime.
 
-**Scope and interpretation:** A checkmark means the feature is supplied **natively and documented** for the stated product, **not** that the feature is identical in depth, quality, security, or default configuration. `◐` means conditional, optional, partial, backend-dependent, or achievable with documented setup. `—` means not a native offering or insufficiently documented; it **does not** mean the feature is impossible. Unverified capabilities are not awarded a checkmark. Unless otherwise stated, “scientific verification” refers to GnosisLab's methodological and execution-evidence mechanisms, **not proof of scientific truth**.
+**Scope and interpretation:** A checkmark means the feature is supplied **natively and documented** for the stated product, **not** that the feature is identical in depth, quality, security, or default configuration. `🟡` means conditional, optional, partial, backend-dependent, or achievable with documented setup. `—` means not a native offering or insufficiently documented; it **does not** mean the feature is impossible. Unverified capabilities are not awarded a checkmark. Unless otherwise stated, “scientific verification” refers to GnosisLab's methodological and execution-evidence mechanisms, **not proof of scientific truth**.
 
 ## At a glance
 
@@ -23,7 +23,7 @@
 
 ## Feature matrix: research and workflow differentiation
 
-**Legend:** `✅` documented native feature; `◐` partial, optional, or configuration-dependent; `—` not natively supplied or not substantiated. **Columns represent the named solution, without combining it with GnosisLab or arbitrary third-party packages.**
+**Legend:** `✅` documented native feature; `🟡` partial, optional, or configuration-dependent; `—` not natively supplied or not substantiated. **Columns represent the named solution, without combining it with GnosisLab or arbitrary third-party packages.**
 
 | Capability | GnosisLab-VM | OpenShell | Docker Sandboxes | E2B | Daytona |
 | --- | :---: | :---: | :---: | :---: | :---: |
@@ -32,8 +32,8 @@
 | Scientific execution evidence and research-record reconciliation | ✅ | — | — | — | — |
 | Methodological controls through GnosisLab | ✅ | — | — | — | — |
 | Explicit trusted scientific-state vs untrusted experiment zones | ✅ | — | — | — | — |
-| Preconfigured interactive Linux research desktop | ✅ | — | ◐ | ◐ | ◐ |
-| Persistent environments across sessions | ✅ | ◐ | ✅ | ◐ | ✅ |
+| Preconfigured interactive Linux research desktop | ✅ | — | 🟡 | 🟡 | 🟡 |
+| Persistent environments across sessions | ✅ | 🟡 | ✅ | 🟡 | ✅ |
 | Reusable environment templates / images | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Host-initiated controlled import/export without a shared host workspace by default | ✅ | — | — | — | — |
 | General-purpose agent execution (agent installed/configured) | ✅ | ✅ | ✅ | ✅ | ✅ |
@@ -45,21 +45,21 @@ The **distinctive integrated combination** is the first five rows: scientific-pr
 
 | Capability | GnosisLab-VM | OpenShell | Docker Sandboxes | E2B | Daytona |
 | --- | :---: | :---: | :---: | :---: | :---: |
-| VM / hypervisor boundary available | ✅ | ◐ | ✅ | ✅ | ◐ |
+| VM / hypervisor boundary available | ✅ | 🟡 | ✅ | ✅ | 🟡 |
 | Distinct rootless containers for trusted services and experiment code inside one guest | ✅ | — | — | — | — |
-| Read-only root filesystem for untrusted experiment container | ✅ | ◐ | ◐ | ◐ | ◐ |
+| Read-only root filesystem for untrusted experiment container | ✅ | 🟡 | 🟡 | 🟡 | 🟡 |
 | Resource/process limits | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Network egress allowlist / deny-by-default policy | — | ✅ | ✅ | — | ✅ |
 | Endpoint-restricted agent credential injection/mediation | — | ✅ | ✅ | — | — |
 | Policy-change proof / formal policy analyzer | — | ✅ | — | — | — |
-| Documented guest/agent command auditing or platform logs | ✅ | ✅ | ◐ | ◐ | ✅ |
+| Documented guest/agent command auditing or platform logs | ✅ | ✅ | 🟡 | 🟡 | ✅ |
 | Local host-managed sandbox workflow | ✅ | ✅ | ✅ | — | — |
-| Hosted / managed on-demand compute offering | — | ◐ | ✅ | ✅ | ✅ |
+| Hosted / managed on-demand compute offering | — | 🟡 | ✅ | ✅ | ✅ |
 | General-purpose SDK/API for sandbox lifecycle | — | ✅ | ✅ | ✅ | ✅ |
 | Kubernetes-native management integration | — | ✅ | — | — | — |
 | Locally managed sandbox runtime on Linux x86-64 host | ✅ | ✅ | ✅ | — | — |
 | Locally managed sandbox runtime on Apple Silicon host | — | ✅ | ✅ | — | — |
-| Local sandbox runtime on Windows host | — | ◐ | ✅ | — | — |
+| Local sandbox runtime on Windows host | — | 🟡 | ✅ | — | — |
 
 **Why some cells are partial:** OpenShell’s VM boundary depends on selecting its MicroVM compute driver; its Docker/Podman modes do not provide a separate VM per workload by themselves. Docker Sandboxes and E2B include tools to build interactive/desktop experiences, but those are not the same as a shipped research desktop with protected scientific state. E2B and Daytona have controls and service options that depend on product tier or deployment; E2B is left unmarked for native egress allowlisting in this survey because current primary-source evidence was insufficient to verify it; this matrix only gives credit for documented native features. A `—` in a *local runtime* row does not mean that a Windows or Mac computer cannot connect to a hosted sandbox.
 
@@ -85,7 +85,7 @@ All host/guest combinations require an appropriate compatible hypervisor, hardwa
 | Capability | Kata Containers | Firecracker | gVisor |
 | --- | :---: | :---: | :---: |
 | VM/hypervisor-backed isolation | ✅ | ✅ | — |
-| OCI/container integration | ✅ | ◐ | ✅ |
+| OCI/container integration | ✅ | 🟡 | ✅ |
 | Designed for dense programmatic isolated workloads | ✅ | ✅ | ✅ |
 | Complete agent gateway and credential mediation | — | — | — |
 | Prebuilt scientific research desktop | — | — | — |

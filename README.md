@@ -59,14 +59,14 @@ GnosisLab-VM is a **scientific research environment**, whereas [NVIDIA OpenShell
 | Structured hypotheses, trials and research decisions | ✅ | — | — | — |
 | Execution evidence tied to scientific research records | ✅ | — | — | — |
 | Separate protected scientific services and untrusted experiment zone | ✅ | — | — | — |
-| Preconfigured interactive scientific research desktop | ✅ | — | ◐ | ◐ |
-| Full VM/hypervisor isolation available | ✅ | ◐ | ✅ | ✅ |
-| Read-only untrusted experiment rootfs | ✅ | ◐ | ◐ | ◐ |
+| Preconfigured interactive scientific research desktop | ✅ | — | 🟡 | 🟡 |
+| Full VM/hypervisor isolation available | ✅ | 🟡 | ✅ | ✅ |
+| Read-only untrusted experiment rootfs | ✅ | 🟡 | 🟡 | 🟡 |
 | Deny-by-default egress policies | — | ✅ | ✅ | — |
 | Provider credentials mediated outside agent workload | — | ✅ | ✅ | — |
 | General-purpose sandbox lifecycle SDK/API | — | ✅ | ✅ | ✅ |
 
-**Legend:** ✅ documented native feature; ◐ optional, partial or backend-dependent; — not a native documented capability. **A tick does not establish equal security or feature depth.** GnosisLab scientific functionality belongs to the [core runtime](https://github.com/cloudcell/gnosislab), which can run independently of this VM edition. OpenShell's VM isolation requires its MicroVM backend. E2B is cloud-oriented.
+**Legend:** ✅ documented native feature; 🟡 optional, partial or backend-dependent; — not a native documented capability. **A tick does not establish equal security or feature depth.** GnosisLab scientific functionality belongs to the [core runtime](https://github.com/cloudcell/gnosislab), which can run independently of this VM edition. OpenShell's VM isolation requires its MicroVM backend. E2B is cloud-oriented.
 
 **Where GnosisLab-VM differs:** research-process and execution-evidence integration, explicitly separated trusted/experiment zones, a persistent research desktop, disposable full-VM templates and deliberate host-controlled data extraction. **Where alternatives lead:** fine-grained egress controls, credential mediation, multi-backend APIs and hosted scaling. GnosisLab-VM's experiment zone currently permits public-network egress; security policy must be reviewed before handling confidential inputs.
 
