@@ -241,7 +241,7 @@ ensure_vm() {
         echo "  inspect the guest image and trusted config:" >&2
         echo "    python3 scripts/qga.py $vm exec 'su - mcp -c \"podman image exists lab-img-mcp\"'" >&2
         echo "    python3 scripts/qga.py $vm exec 'ls -l /home/mcp/.config/labloop/ports.env'" >&2
-        echo "  refusing an insecure partial MCP upgrade; desktop restoration completed" >&2
+        echo "  refusing an insecure partial upgrade; desktop restoration completed" >&2
         return 1
     fi
     # Only packaged images support the audited supervisor. Never copy
