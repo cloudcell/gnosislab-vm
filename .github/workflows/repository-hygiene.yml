@@ -126,6 +126,8 @@ jobs:
           persist-credentials: false
       - name: Validate GitHub Actions supply-chain policy
         run: python3 scripts/check-workflow-supply-chain.py
+      - name: Test VM publication attestation integration (offline)
+        run: python3 -m unittest discover -s tests -p 'test_vm_publication_attestation.py' -v
 
   repository-hygiene:
     # The branch ruleset requires this specific job. Fail closed if any

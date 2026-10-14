@@ -1,0 +1,90 @@
+name: Attest locally published VM image
+# The actual KVM build happens off GitHub. This is a signed publication
+# declaration, NOT GitHub/SLSA build provenance.
+on:
+  workflow_dispatch:
+    inputs:
+      image_name:
+        description: Exact .qcow2 filename (not a path)
+        type: string
+        required: true
+      image_sha256:
+        description: SHA-256 digest of final compressed QCOW2
+        type: string
+        required: true
+      checksum_sha256:
+        description: SHA-256 digest of QCOW2's small checksum sidecar
+        type: string
+        required: true
+      publisher_commit:
+        description: Commit checked out on the local publisher
+        type: string
+        required: true
+      publisher_dirty:
+        description: Whether tracked files were changed in the publisher checkout
+        type: choice
+        options: ['true', 'false']
+        required: true
+      validation_only:
+        description: Test input validation without signing (for CI smoke tests)
+        type: boolean
+        default: false
+        required: false
+permissions:
+  contents: read
+jobs:
+  attest-local-publication:
+    name: attest-local-publication
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    steps:
+      - name: Validate remote publication declaration
+        shell: bash
+        env:
+          IMAGE_NAME: ${{ inputs.image_name }}
+          IMAGE_SHA256: ${{ inputs.image_sha256 }}
+          CHECKSUM_SHA256: ${{ inputs.checksum_sha256 }}
+          PUBLISHER_COMMIT: ${{ inputs.publisher_commit }}
+          PUBLISHER_DIRTY: ${{ inputs.publisher_dirty }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          [[ "$IMAGE_NAME" =~ ^[a-zA-Z0-9][a-zA-Z0-9._-]*[.]qcow2$ ]] || exit 1
+          [[ "$IMAGE_SHA256" =~ ^[a-f0-9]{64}$ ]] || exit 1
+          [[ "$CHECKSUM_SHA256" =~ ^[a-f0-9]{64}$ ]] || exit 1
+          [[ "$PUBLISHER_COMMIT" =~ ^[a-f0-9]{40}$ ]] || exit 1
+          [[ "$PUBLISHER_DIRTY" == true || "$PUBLISHER_DIRTY" == false ]] || exit 1
+          gh api "repos/$GITHUB_REPOSITORY/commits/$PUBLISHER_COMMIT" >/dev/null
+          printf '%s  %s\n' "$IMAGE_SHA256" "$IMAGE_NAME" > subjects.sha256
+          printf '%s  %s\n' "$CHECKSUM_SHA256" "$IMAGE_NAME.sha256" >> subjects.sha256
+          jq -n --arg commit "$PUBLISHER_COMMIT" --arg image "$IMAGE_NAME" \
+                --argjson dirty "$PUBLISHER_DIRTY" \
+            '{
+              schemaVersion: 1,
+              assertion: "local-vm-publication",
+              imageName: $image,
+              publisherCheckoutCommit: $commit,
+              publisherTrackedFilesDirty: $dirty,
+              buildLocation: "external-kvm-host",
+              githubBuildPerformed: false,
+              independentBuildVerification: false
+            }' > publication.json
+
+      - name: Sign and register publication statement
+        if: ${{ !inputs.validation_only }}
+        id: attestation
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-checksums: subjects.sha256
+          predicate-type: https://github.com/cloudcell/gnosislab-vm/blob/master/docs-pub/VM-PUBLICATION-ATTESTATION.md
+          predicate-path: publication.json
+
+      - name: Record publication attestation
+        if: ${{ !inputs.validation_only }}
+        env:
+          ATTESTATION_URL: ${{ steps.attestation.outputs.attestation-url }}
+        run: echo "Publication attestation: $ATTESTATION_URL" >> "$GITHUB_STEP_SUMMARY"

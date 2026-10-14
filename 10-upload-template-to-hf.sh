@@ -16,6 +16,7 @@
 # env:   SKIP_SEAL=1  skip shutdown+seal (image must already be sealed)
 #        DISTDIR=...  where the artifact lands (default: ./dist)
 #        HF_CLI=...   path to hf binary if not on PATH
+#        VM_ATTESTATION=required (default) or skip (community builders)
 set -euo pipefail
 cd "$(dirname "$0")"
 
@@ -89,6 +90,24 @@ sudo chown "$(id -u):$(id -g)" "$OUT"
 
 note "checksum"
 (cd "$DISTDIR" && sha256sum "$(basename "$OUT")" > "$(basename "$OUT").sha256")
+(cd "$DISTDIR" && sha256sum -c "$(basename "$OUT").sha256") \
+    || die "image checksum verification failed"
+
+# GitHub OIDC attestation covers the exact image and small SHA-256 sidecar.
+# Official publishing: required by default, fail closed if GitHub is unavailable.
+# Community publishing: VM_ATTESTATION=skip disables only attestation (not hashing).
+VM_ATTESTATION="${VM_ATTESTATION:-required}"
+case "$VM_ATTESTATION" in
+    required)
+        note "requesting signed publication attestation from GitHub"
+        python3 scripts/vm_publication_attestation.py request "$OUT" "$OUT.sha256" \
+            || die "attestation failed; nothing uploaded (community builders: VM_ATTESTATION=skip)"
+        ;;
+    skip)
+        echo "    UNATTESTED COMMUNITY IMAGE: GitHub signature check explicitly skipped"
+        ;;
+    *) die "VM_ATTESTATION must be required or skip" ;;
+esac
 
 note "upload -> $BUCKET"
 "$HF" buckets cp "$OUT"        "$BUCKET/$(basename "$OUT")"
