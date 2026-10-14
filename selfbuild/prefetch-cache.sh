@@ -15,8 +15,10 @@
 #       LABLOOP_CACHE_MAX_AGE_HOURS   (default 24 — ISO exempt: it is
 #                                     sha256-verified at use time)
 #       LABLOOP_CACHE_MIN_FREE_GIB    (default 8 — image tarballs are GBs)
-#       GNOSISLAB_VER            gnosislab package pin (default read from
-#                                create-lab-template; env wins)
+#       GNOSISLAB_VER            gnosislab package pin: "latest" (default)
+#                                resolves to the newest PyPI release every
+#                                run — TTL=0 for this package, always fresh;
+#                                set to a version to pin (required offline)
 #       XDG_CACHE_HOME           cache root override
 #
 # GUEST_PKGS is the single source of truth for the guest package set —
@@ -51,7 +53,7 @@ OC_VER=$(grep -oE '@opencode/cli@[0-9]+\.[0-9]+\.[0-9]+' \
 
 # gnosislab version: create-lab-template's GNOSISLAB_VER line is the
 # single source of truth — eval the assignment so its env override +
-# default both apply here (a bump there must make pkgs+wheels non-ok)
+# default both apply here
 eval "$(sed -n '/^GNOSISLAB_VER=/p' "$REPO/create-lab-template")"
 GNOSISLAB_VER="${GNOSISLAB_VER:-}"
 
@@ -69,6 +71,19 @@ case "${1:-}" in
     *) die "unknown flag '$1'" ;;
 esac
 
+# "latest" → newest PyPI release; a stale pin is exactly what TTL=0
+# exists to prevent. Offline runs cannot resolve — require a pin.
+if [ "$GNOSISLAB_VER" = latest ]; then
+    [ "$OFFLINE" = 1 ] \
+        && die "GNOSISLAB_VER=latest cannot resolve offline — set GNOSISLAB_VER to a version"
+    GNOSISLAB_VER=$(curl -fsSL https://pypi.org/pypi/gnosislab/json \
+        | grep -oE '"version": *"[^"]+"' | head -1 \
+        | grep -oE '[0-9][0-9A-Za-z.-]*') \
+        && [ -n "$GNOSISLAB_VER" ] \
+        || die "cannot resolve latest gnosislab release from PyPI"
+    say "gnosislab: latest -> $GNOSISLAB_VER"
+fi
+
 mkdir -p "$CACHE"/{apt,images,wheels/{trial-env,uvx,gnosislab},pkgs/gnosislab}
 
 # ISO identity lives in mk-auto-iso.sh — eval its four assignments so a
@@ -83,7 +98,7 @@ mkdir -p "$ISO_CACHE"
 have_iso()    { compgen -G "$ISO_CACHE/linuxmint-*-xfce-64bit.iso" >/dev/null; }
 have_apt()    { [ -f "$CACHE/apt/Packages.gz" ] \
                 && compgen -G "$CACHE/apt/*.deb" >/dev/null; }
-have_images() { compgen -G "$CACHE/images/lab-img-mcp-*.tar" >/dev/null \
+have_images() { [ -f "$CACHE/images/lab-img-mcp-gnosislab-$GNOSISLAB_VER.tar" ] \
                 && compgen -G "$CACHE/images/lab-img-exp-*.tar" >/dev/null; }
 have_wheels() { compgen -G "$CACHE/wheels/trial-env/*.whl" >/dev/null \
                 && compgen -G "$CACHE/wheels/uvx/uv-*.whl" >/dev/null \
@@ -258,24 +273,53 @@ fetch_wheels() {
     # download inside the target interpreter so wheel tags match the
     # guest's py3.12 (host python may differ)
     command -v podman >/dev/null || die "podman required (wheel downloads run in python:3.12-slim)"
-    note "wheels: trial-env + uvx + gnosislab closures (inside python:3.12-slim)"
+    note "wheels: trial-env + uvx closures (inside python:3.12-slim)"
     podman run --rm -v "$CACHE/wheels:/out:z" docker.io/library/python:3.12-slim \
         pip download --no-cache-dir -d /out/trial-env $TRIAL_PKGS
     podman run --rm -v "$CACHE/wheels:/out:z" docker.io/library/python:3.12-slim \
         pip download --no-cache-dir -d /out/uvx $UVX_PKGS
-    # gnosislab wheel closure — the trusted zone's full install set
-    # (gnosislab itself + mcp/pydantic/httpx + transitives, ~20 wheels).
-    # uv rides along: the Containerfile installs it from this wheelhouse
-    # under OFFLINE=1 so an in-guest rebuild never touches PyPI.
+    have_wheels || die "wheel layer incomplete"
+}
+
+# gnosislab is TTL=0: the trusted-zone wheelhouse + sdist re-pull on
+# EVERY online run (not just when the wheels/pkgs layers look stale),
+# so a built VM always carries the newest PyPI release. Cheap — ~20
+# small wheels + a config sdist — unlike the heavyweight layers.
+# The wheelhouse is wiped first so no stale transitive wheel can linger
+# into an offline --no-index install.
+fetch_gnosislab() {
+    command -v podman python3 curl >/dev/null || die "podman + python3 + curl required"
+    note "gnosislab==$GNOSISLAB_VER: fresh wheel closure + sdist (TTL=0)"
+    rm -rf "$CACHE/wheels/gnosislab"; mkdir -p "$CACHE/wheels/gnosislab"
     podman run --rm -v "$CACHE/wheels:/out:z" docker.io/library/python:3.12-slim \
         pip download --no-cache-dir -d /out/gnosislab \
         "gnosislab==$GNOSISLAB_VER" uv
-    # a pin bump leaves the old version's wheel behind — drop it so a
-    # stale glob can never satisfy have_wheels for a version we no
-    # longer ship
-    find "$CACHE/wheels/gnosislab" -name 'gnosislab-*.whl' \
-        ! -name "gnosislab-${GNOSISLAB_VER}-*" -delete
-    have_wheels || die "wheel layer incomplete"
+    # the config payload (ports.env, ml-*.toml) ships ONLY in the sdist;
+    # the wheel is code-only. Resolve via the JSON API rather than
+    # guessing the packages/source URL so a missing version errors clearly.
+    local gmeta gurl
+    gmeta=$(curl -fsSL "https://pypi.org/pypi/gnosislab/$GNOSISLAB_VER/json") \
+        || die "pypi: gnosislab $GNOSISLAB_VER metadata fetch failed"
+    gurl=$(printf '%s' "$gmeta" | python3 -c '
+import json,sys
+print(next((u["url"] for u in json.load(sys.stdin)["urls"]
+            if u["packagetype"] == "sdist"), ""))')
+    [ -n "$gurl" ] || die "pypi: no sdist for gnosislab $GNOSISLAB_VER"
+    curl -fL --progress-bar \
+        -o "$CACHE/pkgs/gnosislab-${GNOSISLAB_VER}.tar.gz" "$gurl"
+    # superseded pins are dead weight and would satisfy stale globs
+    find "$CACHE/pkgs" -maxdepth 1 -name 'gnosislab-*.tar.gz' \
+        ! -name "gnosislab-${GNOSISLAB_VER}.tar.gz" -delete
+    # extract the config payload beside the sdist — render consumers
+    # (image bake ctx, diagnostics push) read the plain files
+    local gx; gx="$(mktemp -d)"
+    tar -xzf "$CACHE/pkgs/gnosislab-${GNOSISLAB_VER}.tar.gz" -C "$gx"
+    rm -rf "$CACHE/pkgs/gnosislab"; mkdir -p "$CACHE/pkgs/gnosislab"
+    cp "$gx"/gnosislab-*/ports.env "$gx"/gnosislab-*/ml-*.toml \
+        "$CACHE/pkgs/gnosislab/"
+    [ ! -d "$gx"/gnosislab-*/diagnostics ] \
+        || cp -a "$gx"/gnosislab-*/diagnostics "$CACHE/pkgs/gnosislab/"
+    rm -rf "$gx"
 }
 
 fetch_pkgs() {
@@ -314,37 +358,6 @@ fetch_pkgs() {
         [ -n "$u" ] || die "open-vsx: no download URL for $ext"
         curl -fsSL -o "$CACHE/pkgs/$(basename "$u")" "$u"
     done
-    # gnosislab sdist — the config payload (ports.env, ml-*.toml,
-    # diagnostics/) ships ONLY in the sdist; the wheel is code-only.
-    # Resolve via the JSON API rather than guessing the packages/source
-    # URL so a missing version errors clearly.
-    note "pkgs: gnosislab==$GNOSISLAB_VER sdist + config extract"
-    local gmeta gurl
-    gmeta=$(curl -fsSL "https://pypi.org/pypi/gnosislab/$GNOSISLAB_VER/json") \
-        || die "pypi: gnosislab $GNOSISLAB_VER metadata fetch failed"
-    gurl=$(printf '%s' "$gmeta" | python3 -c '
-import json,sys
-print(next((u["url"] for u in json.load(sys.stdin)["urls"]
-            if u["packagetype"] == "sdist"), ""))')
-    [ -n "$gurl" ] || die "pypi: no sdist for gnosislab $GNOSISLAB_VER"
-    curl -fL --progress-bar \
-        -o "$CACHE/pkgs/gnosislab-${GNOSISLAB_VER}.tar.gz" "$gurl"
-    # superseded pins are dead weight and would satisfy stale globs
-    find "$CACHE/pkgs" -maxdepth 1 -name 'gnosislab-*.tar.gz' \
-        ! -name "gnosislab-${GNOSISLAB_VER}.tar.gz" -delete
-    # extract the config payload beside the sdist — render consumers
-    # (image bake ctx, diagnostics push) read the plain files
-    local gx; gx="$(mktemp -d)"
-    tar -xzf "$CACHE/pkgs/gnosislab-${GNOSISLAB_VER}.tar.gz" -C "$gx"
-    rm -rf "$CACHE/pkgs/gnosislab"; mkdir -p "$CACHE/pkgs/gnosislab"
-    cp "$gx"/gnosislab-*/ports.env "$gx"/gnosislab-*/ml-*.toml \
-        "$CACHE/pkgs/gnosislab/"
-    local diagnostics
-    for diagnostics in "$gx"/gnosislab-*/diagnostics; do
-        [ -d "$diagnostics" ] || continue
-        cp -a "$diagnostics" "$CACHE/pkgs/gnosislab/"
-    done
-    rm -rf "$gx"
     have_pkgs || die "pkgs layer incomplete"
 }
 
@@ -401,6 +414,16 @@ if ((${#needs_fetch[@]})); then
         printf '    GAPS: %s\n' "${needs_fetch[*]}" >&2
         die "cache incomplete — warm it with ./selfbuild/prefetch-cache.sh"
     fi
+fi
+
+# gnosislab is TTL=0 — refreshed on every online ensure/refresh run
+# (not only when its layer looks stale), before fetch_images bakes the
+# mcp image against the wheelhouse. --verify never fetches; OFFLINE
+# keeps whatever is cached.
+if [ "$OFFLINE" != 1 ] && [ "$MODE" != verify ] \
+    && { [ -z "$ONLY" ] || [ "$ONLY" = wheels ] || [ "$ONLY" = pkgs ]; }; then
+    fetch_gnosislab
+    manifest_regen
 fi
 
 if ((${#needs_fetch[@]})); then
