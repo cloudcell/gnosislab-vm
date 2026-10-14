@@ -137,6 +137,8 @@ jobs:
         run: python3 -m unittest discover -s tests -p 'test_trusted_runtime_assets.py' -v
       - name: Verify fail-closed VM trial isolation preflight (offline)
         run: python3 -m unittest discover -s tests -p 'test_vm_trial_isolation.py' -v
+      - name: Test VSCodium launcher and VSIX selection (offline)
+        run: python3 -m unittest discover -s tests -p 'test_codium_launcher.py' -v
 
   repository-hygiene:
     # The branch ruleset requires this specific job. Fail closed if any
