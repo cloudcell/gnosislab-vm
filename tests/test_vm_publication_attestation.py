@@ -76,12 +76,33 @@ class PublicationTests(unittest.TestCase):
         with patch.object(app.shutil, "which", return_value="/usr/bin/gh"), \
              patch.object(app, "run", return_value=json.dumps([self.record()])) as command:
             app.verify(self.checksum)
-            self.assertIn("--signer-workflow", command.call_args.args)
-            self.assertIn(app.SIGNER, command.call_args.args)
-            self.assertIn(app.PREDICATE, command.call_args.args)
+            commands = [c.args for c in command.call_args_list]
+            self.assertIn(("gh", "attestation", "verify", "--help"), commands)
+            verification = commands[-1]
+            self.assertIn("--signer-workflow", verification)
+            self.assertIn(app.SIGNER, verification)
+            self.assertIn(app.PREDICATE, verification)
+
+    def test_missing_or_outdated_gh_refuses_before_dispatch(self):
+        with patch.object(app.shutil, "which", return_value=None), \
+             patch.object(app, "run") as execute:
+            with self.assertRaisesRegex(app.PublicationError, "missing"):
+                app.request(self.image, self.checksum)
+            execute.assert_not_called()
+        with patch.object(app.shutil, "which", return_value="/usr/bin/gh"), \
+             patch.object(app, "run", side_effect=app.PublicationError(
+                 'gh failed (exit 1): unknown command "attestation" for "gh"'
+             )) as execute:
+            with self.assertRaisesRegex(app.PublicationError, "Upgrade gh"):
+                app.request(self.image, self.checksum)
+            execute.assert_called_once_with(
+                "gh", "attestation", "verify", "--help", timeout=20
+            )
 
     def test_request_uses_exact_workflow_run_id(self):
         def command(*args, **kwargs):
+            if args == ("gh", "attestation", "verify", "--help"):
+                return "GitHub attestation verify help"
             if args[:2] == ("git", "rev-parse"):
                 return "a" * 40 + "\n"
             if args[:2] == ("git", "status"):
