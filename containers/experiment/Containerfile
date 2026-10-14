@@ -2,7 +2,7 @@
 # Contains no credentials, no sockets, no host paths; built to be
 # burned down. Extend the pip line per actual experiment needs —
 # heavyweight deps (torch, jax) go here or in per-experiment layers.
-FROM docker.io/library/python:3.12-slim
+FROM docker.io/library/python:3.14-slim
 
 # lean LaTeX set — NOT texlive-full: a ~4 GB image makes the keep-id
 # storage-chown on first start exceed any reasonable timeout. Missing
