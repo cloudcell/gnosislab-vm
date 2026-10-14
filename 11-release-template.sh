@@ -56,7 +56,7 @@ WHO="$("$HF" auth whoami 2>/dev/null | sed -n 's/.*user:[[:space:]]*//p' | head 
 
 bucket_files() {  # bare object names in a bucket, one per line
     "$HF" buckets ls "$1" 2>/dev/null \
-        | grep -oE '[^[:space:]]+\.(qcow2|sha256)' | sort -u
+        | grep -oE '[^[:space:]]+\.(qcow2|sha256|json)' | sort -u
 }
 
 # ------------------------------------------------------------------
@@ -78,15 +78,19 @@ grep -qxF "$NAME" <(printf '%s\n' "${images[@]}") \
     || die "$NAME not found in $SRC"
 
 SHA="$NAME.sha256"
+PROVENANCE="$NAME.provenance.json"
 VM_ATTESTATION="${VM_ATTESTATION:-required}"
 case "$VM_ATTESTATION" in
     required|skip) ;;
     *) die "VM_ATTESTATION must be required or skip" ;;
 esac
-# No release, including opt-out community releases, without a checksum.
+# No release, including opt-out community releases, without checksums
+# and the human-readable signed publication manifest.
 bucket_files "$SRC" | grep -qxF "$SHA" \
     || die "source is missing $SHA; refusing unchecked release"
 have_sha=1
+bucket_files "$SRC" | grep -qxF "$PROVENANCE" \
+    || die "source is missing signed provenance manifest $PROVENANCE"
 # The official Cloudcell public bucket is always signed, even if skip was
 # accidentally exported in the shell. Independent destinations can opt out.
 if [ "$DST" = "hf://buckets/cloudcell/LabLoop" ] && [ "$VM_ATTESTATION" = skip ]; then
@@ -101,13 +105,24 @@ if [ "$VM_ATTESTATION" = required ]; then
     note "verifying signed GitHub publication declaration"
     "$HF" buckets cp "$SRC/$SHA" "$attest_dir/$SHA" \
         || die "could not download checksum sidecar for attestation"
+    "$HF" buckets cp "$SRC/$PROVENANCE" "$attest_dir/$PROVENANCE" \
+        || die "could not download provenance manifest"
     python3 scripts/vm_publication_attestation.py verify "$attest_dir/$SHA" \
-        --image-name "$NAME" \
+        --image-name "$NAME" --provenance "$attest_dir/$PROVENANCE" \
         || die "no valid Cloudcell GitHub publication attestation; release refused"
     rm -rf "$attest_dir"
     trap - EXIT
 else
     echo "    UNATTESTED COMMUNITY RELEASE: signature verification skipped explicitly"
+    attest_dir="$(mktemp -d)"
+    trap 'rm -rf "$attest_dir"' EXIT
+    "$HF" buckets cp "$SRC/$SHA" "$attest_dir/$SHA"
+    "$HF" buckets cp "$SRC/$PROVENANCE" "$attest_dir/$PROVENANCE"
+    python3 scripts/vm_publication_attestation.py provenance-check \
+        "$attest_dir/$SHA" --provenance "$attest_dir/$PROVENANCE" \
+        || die "unsigned provenance metadata is inconsistent with checksum"
+    rm -rf "$attest_dir"
+    trap - EXIT
 fi
 
 # ------------------------------------------------------------------
@@ -142,7 +157,8 @@ copy_obj() {  # $1=object name
 
 note "copying -> $DST"
 copy_obj "$NAME"                        || die "copy failed: $NAME"
-[ "$have_sha" -eq 1 ] && copy_obj "$SHA" || true
+copy_obj "$SHA" || die "copy failed: $SHA"
+copy_obj "$PROVENANCE" || die "copy failed: $PROVENANCE"
 
 # verify both objects are present in the destination
 note "verifying"
@@ -151,7 +167,9 @@ grep -qxF "$NAME" <<<"$dst_files" || die "$NAME did not land in $DST"
 if [ "$have_sha" -eq 1 ]; then
     grep -qxF "$SHA" <<<"$dst_files" || die "$SHA did not land in $DST"
 fi
-echo "    present in $DST: $NAME$([ "$have_sha" -eq 1 ] && echo " + $SHA")"
+grep -qxF "$PROVENANCE" <<<"$dst_files" \
+    || die "$PROVENANCE did not land in $DST"
+echo "    present in $DST: $NAME + $SHA + $PROVENANCE"
 
 # ------------------------------------------------------------------
 if [ "$KEEP" -eq 0 ]; then
@@ -160,6 +178,8 @@ if [ "$KEEP" -eq 0 ]; then
     if [ "$have_sha" -eq 1 ]; then
         "$HF" buckets rm "$SRC/$SHA" || echo "    WARN: could not remove $SHA from source"
     fi
+    "$HF" buckets rm "$SRC/$PROVENANCE" \
+        || echo "    WARN: could not remove $PROVENANCE from source"
 fi
 
 cat <<EOF
@@ -169,5 +189,6 @@ cat <<EOF
     recipients:
       hf buckets cp $DST/$NAME .
       sha256sum -c $NAME.sha256
+      python3 scripts/vm_publication_attestation.py verify $NAME.sha256 --provenance $PROVENANCE
       ./20-import-lab-vm.sh $NAME <name>
 EOF
