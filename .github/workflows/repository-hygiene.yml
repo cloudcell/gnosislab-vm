@@ -131,6 +131,8 @@ jobs:
         run: |
           set -euo pipefail
           ruby -e 'require "yaml"; Dir[".github/workflows/*.{yml,yaml}"].each { |file| YAML.parse_file(file); puts "Valid YAML: #{file}" }'
+      - name: Test guest-agent transport and recovery (offline)
+        run: python3 -m unittest discover -s tests -p 'test_qga.py' -v
       - name: Test VM publication attestation integration (offline)
         run: python3 -m unittest discover -s tests -p 'test_vm_publication_attestation.py' -v
       - name: Test standard numbered publication workflows (offline)
