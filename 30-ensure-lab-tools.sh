@@ -171,7 +171,7 @@ ensure_vm() {
              check-lab-ready.sh \
              labloop-display.sh labloop-display.desktop \
              labloop-display-lightdm.conf \
-             opencode.json opencode.jsonc; do
+             opencode.json opencode.jsonc configure-host-models.py; do
         qga_push "$vm" "$REPO/deploy/$f" "/tmp/ensure-$f"
     done
     qga_push "$vm" "$WORK/display.conf" /tmp/ensure-display.conf
@@ -449,8 +449,11 @@ ensure_vm() {
         install -d -m 0755 -o lab -g lab /home/lab/.config/opencode &&
         install -m 0644 -o lab -g lab /tmp/ensure-opencode.json \
             /home/lab/.config/opencode/opencode.json &&
-        install -m 0644 -o lab -g lab /tmp/ensure-opencode.jsonc \
-            /home/lab/.config/opencode/opencode.jsonc &&
+        test -e /home/lab/.config/opencode/opencode.jsonc ||
+            install -m 0644 -o lab -g lab /tmp/ensure-opencode.jsonc \
+                /home/lab/.config/opencode/opencode.jsonc &&
+        install -m 0755 -o lab -g lab /tmp/ensure-configure-host-models.py \
+            /home/lab/Desktop/configure-host-models.py &&
         install -m 0440 -o lab -g lab /tmp/ensure-labloop.sudoers \
             /srv/lab/workspace/ml-labloop/deploy/labloop.sudoers &&
         install -m 0644 -o lab -g lab /tmp/ensure-labloop-tmpfiles.conf \
