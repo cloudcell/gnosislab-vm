@@ -48,7 +48,7 @@ are sufficient. On the trusted physical host, after merging this feature:
 ```bash
 git switch master && git pull --ff-only
 IMAGE=dist/lab-template-20261014T0456Z-20261014T0539Z.qcow2
-sha256sum -c "$IMAGE.sha256"
+(cd "$(dirname "$IMAGE")" && sha256sum -c "$(basename "$IMAGE").sha256")
 python3 scripts/vm_publication_attestation.py provenance-create \
   "$IMAGE.sha256" --gnosislab-version 0.1.45
 python3 scripts/vm_publication_attestation.py request \
