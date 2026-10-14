@@ -15,10 +15,14 @@ BUCKET="hf://buckets/LabLoopCommunity/lab-trials"
 [ -f "$IMAGE" ] || die "missing QCOW2 image: $IMAGE"
 IMAGE="$(realpath "$IMAGE")"
 SIDECAR="$IMAGE.sha256"
+MANIFEST="$IMAGE.provenance.json"
 [ -f "$SIDECAR" ] || die "missing checksum sidecar"
-echo "==> verifying local image and checksum"
+[ -f "$MANIFEST" ] || die "missing provenance manifest; generate and sign it before uploading"
+echo "==> verifying local image, checksum and provenance"
 (cd "$(dirname "$IMAGE")" && sha256sum --check --status "$(basename "$SIDECAR")") \
   || die "QCOW2 checksum mismatch, refusing upload"
+python3 scripts/vm_publication_attestation.py provenance-check "$SIDECAR" \
+  --provenance "$MANIFEST" || die "invalid provenance manifest"
 HF="$(command -v hf || true)"
 [ -z "${HF_CLI:-}" ] || HF="${HF_CLI}"
 if [ -z "$HF" ]; then
@@ -30,7 +34,7 @@ case "${VM_ATTESTATION:-required}" in
   required|"")
     echo "==> verifying existing signed GitHub publication"
     python3 scripts/vm_publication_attestation.py verify "$SIDECAR" \
-        --image-name "$(basename "$IMAGE")" \
+        --image-name "$(basename "$IMAGE")" --provenance "$MANIFEST" \
       || die "no valid attestation for this image/sidecar; do not upload"
     ;;
   skip)
@@ -45,4 +49,5 @@ read -r -p "    upload this verified image and checksum? [y/N] " answer
 case "$answer" in [Yy]*) ;; *) die "cancelled";; esac
 "$HF" buckets cp "$IMAGE" "$BUCKET/$(basename "$IMAGE")"
 "$HF" buckets cp "$SIDECAR" "$BUCKET/$(basename "$SIDECAR")"
-echo "==> uploaded $(basename "$IMAGE") and its checksum to $BUCKET"
+"$HF" buckets cp "$MANIFEST" "$BUCKET/$(basename "$MANIFEST")"
+echo "==> uploaded $(basename "$IMAGE") its checksum and signed provenance manifest to $BUCKET"

@@ -16,6 +16,11 @@ on:
         description: SHA-256 digest of QCOW2's small checksum sidecar
         type: string
         required: true
+      provenance_sha256:
+        description: SHA-256 of optional JSON publication manifest
+        type: string
+        required: false
+        default: ''
       publisher_commit:
         description: Commit checked out on the local publisher
         type: string
@@ -48,6 +53,7 @@ jobs:
           IMAGE_NAME: ${{ inputs.image_name }}
           IMAGE_SHA256: ${{ inputs.image_sha256 }}
           CHECKSUM_SHA256: ${{ inputs.checksum_sha256 }}
+          PROVENANCE_SHA256: ${{ inputs.provenance_sha256 }}
           PUBLISHER_COMMIT: ${{ inputs.publisher_commit }}
           PUBLISHER_DIRTY: ${{ inputs.publisher_dirty }}
           GH_TOKEN: ${{ github.token }}
@@ -56,11 +62,15 @@ jobs:
           [[ "$IMAGE_NAME" =~ ^[a-zA-Z0-9][a-zA-Z0-9._-]*[.]qcow2$ ]] || exit 1
           [[ "$IMAGE_SHA256" =~ ^[a-f0-9]{64}$ ]] || exit 1
           [[ "$CHECKSUM_SHA256" =~ ^[a-f0-9]{64}$ ]] || exit 1
+          [[ -z "$PROVENANCE_SHA256" || "$PROVENANCE_SHA256" =~ ^[a-f0-9]{64}$ ]] || exit 1
           [[ "$PUBLISHER_COMMIT" =~ ^[a-f0-9]{40}$ ]] || exit 1
           [[ "$PUBLISHER_DIRTY" == true || "$PUBLISHER_DIRTY" == false ]] || exit 1
           gh api "repos/$GITHUB_REPOSITORY/commits/$PUBLISHER_COMMIT" >/dev/null
           printf '%s  %s\n' "$IMAGE_SHA256" "$IMAGE_NAME" > subjects.sha256
           printf '%s  %s\n' "$CHECKSUM_SHA256" "$IMAGE_NAME.sha256" >> subjects.sha256
+          if [[ -n "$PROVENANCE_SHA256" ]]; then
+            printf '%s  %s\n' "$PROVENANCE_SHA256" "$IMAGE_NAME.provenance.json" >> subjects.sha256
+          fi
           jq -n --arg commit "$PUBLISHER_COMMIT" --arg image "$IMAGE_NAME" \
                 --argjson dirty "$PUBLISHER_DIRTY" \
             '{

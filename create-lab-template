@@ -1170,6 +1170,26 @@ next=$($VIRSH snapshot-list --name "$VM" | \
 snap="snp-v$(( ${next:-0} + 1 ))"
 $VIRSH snapshot-create-as "$VM" "$snap" "create-lab-template"
 
+# Record a finished builder's resolved package version and source commit
+# outside the guest. The export step will attach this evidence to the
+# image's signed publication manifest. This file is not a build attestation.
+mkdir -p "$REPO/dist"
+python3 - "$REPO/dist/$VM.build-info.json" "$VM" "$GNOSISLAB_VER" "$REPO" <<'BUILD_INFO'
+import json, subprocess, sys
+from pathlib import Path
+output, vm, version, root = sys.argv[1:]
+commit = subprocess.check_output(
+    ["git", "-C", root, "rev-parse", "--verify", "HEAD"], text=True
+).strip()
+data = {
+    "schemaVersion": 1,
+    "templateName": vm,
+    "gnosislabVersion": version,
+    "vmBuilderCommit": commit,
+}
+Path(output).write_text(json.dumps(data, indent=2, sort_keys=True) + "\n")
+BUILD_INFO
+
 cat <<EOF
 
 ==> template '$VM' built, battery green, snapshotted as $snap.
