@@ -100,11 +100,38 @@ jobs:
         with:
           category: /language:python
 
+  dependency-review:
+    name: dependency-review
+    if: ${{ github.event_name == 'pull_request' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - name: Block newly introduced vulnerable dependencies
+        uses: actions/dependency-review-action@a1d282b36b6f3519aa1f3fc636f609c47dddb294 # v5.0.0
+        with:
+          fail-on-severity: high
+          comment-summary-in-pr: never
+
+  workflow-supply-chain:
+    name: workflow-supply-chain
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Validate GitHub Actions supply-chain policy
+        run: python3 scripts/check-workflow-supply-chain.py
+
   repository-hygiene:
     # The branch ruleset requires this specific job. Fail closed if any
     # upstream scan fails, rather than allowing skipped jobs as passing checks.
     if: ${{ always() }}
-    needs: [shell-security, container-security, codeql-python]
+    needs: [shell-security, container-security, codeql-python, dependency-review, workflow-supply-chain]
     name: repository-hygiene
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -116,7 +143,13 @@ jobs:
           test "${{ needs.shell-security.result }}" = success
           test "${{ needs.container-security.result }}" = success
           test "${{ needs.codeql-python.result }}" = success
-      - uses: actions/checkout@v4
+          test "${{ needs.workflow-supply-chain.result }}" = success
+          if [[ "${{ github.event_name }}" == pull_request ]]; then
+            test "${{ needs.dependency-review.result }}" = success
+          else
+            test "${{ needs.dependency-review.result }}" = skipped
+          fi
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           persist-credentials: false
           fetch-depth: 0  # Required to scan PR commit history
