@@ -64,29 +64,12 @@ sudo -v
 SUDO_KEEPALIVE=$!
 trap 'report_phases; kill "$SUDO_KEEPALIVE" 2>/dev/null; rm -rf "$WORK"' EXIT
 
-cat > "$WORK/qga.py" <<'PYEOF'
-import base64, json, subprocess, sys, time
-dom, args = sys.argv[1], sys.argv[2:]
-def qga(payload):
-    r = subprocess.run(["virsh","-c","qemu:///system","qemu-agent-command",
-                        dom, json.dumps(payload)],
-                       capture_output=True, text=True, check=True)
-    return json.loads(r.stdout)["return"]
-if args and args[0] == "ping":
-    print("agent-ok"); sys.exit(0)
-pid = qga({"execute":"guest-exec","arguments":
-           {"path":"/bin/sh","arg":["-c"," ".join(args)],"capture-output":True}})["pid"]
-for _ in range(60):
-    time.sleep(2)
-    st = qga({"execute":"guest-exec-status","arguments":{"pid":pid}})
-    if st.get("exited"):
-        sys.stdout.write(base64.b64decode(st.get("out-data","")or"").decode("utf-8","replace"))
-        sys.exit(st.get("exitcode",1))
-sys.exit("guest-exec timeout")
-PYEOF
+# Shared driver checks the actual guest-ping response and preserves results.
+QGA_DRIVER="$(cd "$(dirname "$0")" && pwd)/scripts/qga.py"
+[ -f "$QGA_DRIVER" ] || die "missing $QGA_DRIVER"
 
-agent_ready() { python3 "$WORK/qga.py" "$VM" ping >/dev/null 2>&1; }
-qga()       { python3 "$WORK/qga.py" "$VM" exec "$@"; }
+agent_ready() { python3 "$QGA_DRIVER" "$VM" ping >/dev/null 2>&1; }
+qga()       { python3 "$QGA_DRIVER" "$VM" exec "$@"; }
 
 running()   { [ "$($VIRSH domstate "$VM" 2>/dev/null)" != "shut off" ]; }
 
