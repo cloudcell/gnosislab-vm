@@ -99,6 +99,92 @@ class PublicationTests(unittest.TestCase):
                 "gh", "attestation", "verify", "--help", timeout=20
             )
 
+    def test_signed_manifest_is_required_when_provided(self):
+        manifest = self.checksum.with_name(self.name + ".provenance.json")
+        with patch.object(app, "run", side_effect=[
+            "a" * 40 + "\\n", "",
+        ]):
+            app.create_provenance(self.checksum, version="0.1.45")
+        self.assertEqual(
+            app.provenance_data(self.checksum, manifest)["software"]["versionEvidence"],
+            "publisher-declared",
+        )
+        record = self.record()
+        record["verificationResult"]["statement"]["subject"].append({
+            "name": manifest.name,
+            "digest": {"sha256": app.sha256(manifest)},
+        })
+        self.assertTrue(app.matching_statement(
+            [record], self.name, self.digest, app.sha256(self.checksum),
+            manifest_digest=app.sha256(manifest),
+        ))
+        self.assertFalse(app.matching_statement(
+            [self.record()], self.name, self.digest, app.sha256(self.checksum),
+            manifest_digest=app.sha256(manifest),
+        ))
+        with patch.object(app.shutil, "which", return_value="/usr/bin/gh"), \
+             patch.object(app, "run", side_effect=[
+                "help", json.dumps([record])
+             ]):
+            app.verify(self.checksum, provenance=manifest)
+
+    def test_manifest_tampering_and_wrong_commit_rejected(self):
+        with patch.object(app, "run", side_effect=["a" * 40 + "\\n", ""]):
+            manifest = app.create_provenance(self.checksum, version="0.1.45")
+        with self.assertRaises(app.PublicationError):
+            app.provenance_data(self.checksum, manifest, commit="b" * 40)
+        data = json.loads(manifest.read_text())
+        data["image"]["sha256"] = "f" * 64
+        manifest.write_text(json.dumps(data))
+        with self.assertRaises(app.PublicationError):
+            app.provenance_data(self.checksum, manifest)
+
+    def test_build_recorded_version_and_mismatch_refusal(self):
+        build = Path(self.temp.name) / "build-info.json"
+        build.write_text(json.dumps({
+            "schemaVersion": 1,
+            "templateName": "lab-template-20261014T1230Z",
+            "gnosislabVersion": "0.1.45",
+            "vmBuilderCommit": "a" * 40,
+        }))
+        with patch.object(app, "run", side_effect=["b" * 40 + "\\n", ""]):
+            manifest = app.create_provenance(self.checksum, build_info=build)
+        data = app.provenance_data(self.checksum, manifest)
+        self.assertEqual(data["software"]["gnosislabVersion"], "0.1.45")
+        self.assertEqual(data["software"]["versionEvidence"], "builder-recorded")
+        self.assertEqual(data["source"]["templateBuildCommit"], "a" * 40)
+        with self.assertRaises(app.PublicationError):
+            app.create_provenance(self.checksum, build_info=build, version="0.1.44")
+
+    def test_missing_provenance_version_refused(self):
+        with self.assertRaisesRegex(app.PublicationError, "version unknown"):
+            app.create_provenance(self.checksum)
+
+    def test_manifest_digest_dispatched_for_signature(self):
+        with patch.object(app, "run", side_effect=["a" * 40 + "\\n", ""]):
+            manifest = app.create_provenance(self.checksum, version="0.1.45")
+        def command(*args, **kwargs):
+            if args == ("gh", "attestation", "verify", "--help"):
+                return "help"
+            if args[:2] == ("git", "rev-parse"):
+                return "a" * 40 + "\\n"
+            if args[:2] == ("git", "status"):
+                return ""
+            if args[:2] == ("gh", "api"):
+                data = json.loads(kwargs["stdin"])
+                self.assertEqual(data["inputs"]["provenance_sha256"], app.sha256(manifest))
+                return json.dumps({"workflow_run_id": 12345})
+            if args[:3] == ("gh", "run", "view"):
+                return json.dumps({"status": "completed", "conclusion": "success"})
+            raise AssertionError(args)
+        with patch.object(app.shutil, "which", return_value="/usr/bin/gh"), \
+             patch.object(app, "run", side_effect=command), \
+             patch.object(app, "verify") as verify:
+            app.request(self.image, self.checksum, provenance=manifest)
+            verify.assert_called_once_with(
+                self.checksum, expected=self.name, commit="a" * 40, provenance=manifest,
+            )
+
     def test_request_uses_exact_workflow_run_id(self):
         def command(*args, **kwargs):
             if args == ("gh", "attestation", "verify", "--help"):
