@@ -145,7 +145,9 @@ sudo virt-customize --no-network -d "$vm" \
 # Provision credentials before the greeter starts: a fast VM could display
 # the login screen while guest-agent provisioning is still pending.
 # A publication-sealed template intentionally has no reusable login password.
-if sudo virt-cat -d "$vm" /etc/shadow | grep -q '^lab:[!*]'; then
+sudo virt-cat -d "$vm" /etc/shadow > "$WORK/clone-shadow" \
+    || die "cannot inspect clone credentials; refusing unsafe fallback"
+if grep -q '^lab:[!*]' "$WORK/clone-shadow"; then
     echo "    sealed template: retaining generated one-time credentials after boot"
 else
     note "local clone: restore development-only lab/lab before first boot"
