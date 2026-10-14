@@ -204,3 +204,26 @@ This project was previously called **LabLoop** or **ML-LabLoop**. Repository bra
 - [Apache 2.0 license](LICENSE) and [third-party notices](legal/THIRD-PARTY-NOTICES.md)
 
 Bug reports and feature proposals are welcome via [GitHub issues](https://github.com/cloudcell/gnosislab-vm/issues). **For vulnerabilities, follow [SECURITY.md](SECURITY.md), not public issues.**
+
+## Connect OpenCode to any host-local model
+
+The VM driver can use any **OpenAI-compatible** inference API reachable over the libvirt NAT bridge (vLLM, SGLang, llama.cpp, LM Studio, or Ollama's OpenAI-compatible endpoint). The GnosisLab scientific services and experiment-zone network policy remain separate from the model endpoint. You do **not** need a Qwen-specific patch.
+
+1. Start your inference server on the **host**. If it binds to `127.0.0.1:8002` (host-only), expose it **only** to the libvirt gateway with a relay:
+
+   ```bash
+   python3 scripts/host-llm-gateway.py --port 8002
+   ```
+
+   The relay listens on `192.168.122.1:8002`, forwards to host `127.0.0.1:8002`, and accepts only `192.168.122.0/24`. It is a foreground process; stop with Ctrl+C. If your host vLLM is **already listening** at `192.168.122.1:8002` or `0.0.0.0:8002`, **do not start the relay on the same port**. Restrict host firewall access to the VM bridge instead. Confirm the host actually has a running listener via `ss -ltnp | grep ':8002'` and `curl -f http://127.0.0.1:8002/v1/models`. If the host uses ufw, allow access **only** from the VM subnet on `virbr0`, for example `sudo ufw allow in on virbr0 from 192.168.122.0/24 to 192.168.122.1 port 8002 proto tcp` (review your policy first).
+
+2. In the **guest**, check connectivity and register the served model IDs:
+
+   ```bash
+   curl --max-time 5 -f http://192.168.122.1:8002/v1/models
+   python3 ~/Desktop/configure-host-models.py --url http://192.168.122.1:8002/v1 --context 262144
+   ```
+
+   This generates explicit OpenCode provider model entries from the server's real `/v1/models` IDs, so it works for Qwen3.6, Qwen3.8-Flash-Next, and unrelated models without hardcoding model names. The context flag should reflect your *actual* running server limit, and can be omitted. To use another server/port, change `--url`; to specify an ID on a non-discoverable API, use `--model <served-id>`. You can run the command again after switching models. The configurator preserves `opencode.json` (including GnosisLab MCP entries) and other JSON providers in `opencode.jsonc`. Restart OpenCode and choose the `Host local models` provider. Existing builds should copy `deploy/configure-host-models.py` to `~/Desktop/`, or run `./30-ensure-lab-tools.sh <vm>` on the host after updating.
+
+**Security:** The model API is accessible to the driver VM and any other guest in the allowed libvirt subnet, not just GnosisLab. Do not expose a credential-free inference API to untrusted guests. For stronger multi-tenant isolation, configure authentication and host firewall restrictions. The relay never routes model traffic through the untrusted `exp` container.
