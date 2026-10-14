@@ -517,7 +517,8 @@ done
 verify_manifest || die "manifest hash mismatch"
 # Keep one authoritative version across prefetch and template provisioning.
 if [ "$MODE" != verify ] && [ "$OFFLINE" != 1 ]; then
-    printf '%s\\n' "$GNOSISLAB_VER" > "$CACHE/gnosislab-version"
+    printf '%s\n' "$GNOSISLAB_VER" > "$CACHE/gnosislab-version"
+    manifest_regen
 fi
 
 if [ -n "$ONLY" ]; then
