@@ -1,0 +1,35 @@
+# Feature 5: Dependabot version updates.
+# Updates are proposed through pull requests, never merged automatically.
+# Enable Dependabot alerts and security updates separately in repository settings.
+#
+# GnosisLab-VM builds with Podman Containerfiles rather than Dockerfiles.
+# Dependabot's Docker ecosystem supports these files, but coverage may be
+# incomplete for secondary FROM/COPY --from images or build-time dependencies.
+version: 2
+updates:
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "09:00"
+      timezone: "Pacific/Auckland"
+    open-pull-requests-limit: 5
+
+  - package-ecosystem: "docker"
+    directory: "/containers/experiment"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "10:00"
+      timezone: "Pacific/Auckland"
+    open-pull-requests-limit: 3
+
+  - package-ecosystem: "docker"
+    directory: "/containers/mcp"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "11:00"
+      timezone: "Pacific/Auckland"
+    open-pull-requests-limit: 3
