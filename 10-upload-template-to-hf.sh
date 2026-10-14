@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # 10-upload-template-to-hf.sh — seal the template, flatten+compress it,
-# and push it to the private Hugging Face bucket.
+# and push it with a signed JSON provenance manifest to the trials bucket.
 #
 #   1. confirm publication ([y/N]) — shows the hf account + bucket
 #   2. ./01-prepare-template-for-cloning.sh — publish-mode seal:
@@ -93,6 +93,22 @@ note "checksum"
 (cd "$DISTDIR" && sha256sum -c "$(basename "$OUT").sha256") \
     || die "image checksum verification failed"
 
+# Publish a human-readable, independently verifiable JSON manifest. Its own
+# digest is a third GitHub-signed subject (never merely an unsigned claim).
+note "publication provenance manifest"
+BUILD_INFO="$PWD/dist/$VM.build-info.json"
+if [ -f "$BUILD_INFO" ]; then
+    python3 scripts/vm_publication_attestation.py provenance-create \
+        "$OUT.sha256" --build-info "$BUILD_INFO" \
+        || die "cannot create provenance from build record"
+else
+    [ -n "${GNOSISLAB_VER:-}" ] \
+        || die "missing build record; explicitly set GNOSISLAB_VER for legacy template"
+    python3 scripts/vm_publication_attestation.py provenance-create \
+        "$OUT.sha256" --gnosislab-version "$GNOSISLAB_VER" \
+        || die "cannot create declared provenance"
+fi
+
 # GitHub OIDC attestation covers the exact image and small SHA-256 sidecar.
 # Official publishing: required by default, fail closed if GitHub is unavailable.
 # Community publishing: VM_ATTESTATION=skip disables only attestation (not hashing).
@@ -101,6 +117,7 @@ case "$VM_ATTESTATION" in
     required)
         note "requesting signed publication attestation from GitHub"
         python3 scripts/vm_publication_attestation.py request "$OUT" "$OUT.sha256" \
+            --provenance "$OUT.provenance.json" \
             || die "attestation failed; nothing uploaded (community builders: VM_ATTESTATION=skip)"
         ;;
     skip)
@@ -112,6 +129,7 @@ esac
 note "upload -> $BUCKET"
 "$HF" buckets cp "$OUT"        "$BUCKET/$(basename "$OUT")"
 "$HF" buckets cp "$OUT.sha256" "$BUCKET/$(basename "$OUT").sha256"
+"$HF" buckets cp "$OUT.provenance.json" "$BUCKET/$(basename "$OUT").provenance.json"
 
 cat <<EOF
 
