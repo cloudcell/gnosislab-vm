@@ -630,14 +630,15 @@ qga "printf 'ML_EPISTEME_INGEST_TOKEN=%s\n' \"\$(head -c 32 /dev/urandom | base6
 # before the mcp quadlet starts. No image rebuild is needed for supervisor fixes.
 # Keep root ownership so lab (and agents using lab's identity) cannot modify them.
 note "installing root-owned trusted MCP runtime assets"
-qga_push "$REPO/deploy/seccomp-labloop.json" /tmp/labloop-seccomp-root.json
-qga_push "$REPO/containers/mcp/entrypoint.sh" /tmp/labloop-entrypoint-root.sh
-qga "install -d -m 0755 -o root -g root /etc/labloop /usr/local/libexec && \
-     install -m 0644 -o root -g root /tmp/labloop-seccomp-root.json \
+qga "install -d -m 0755 -o root -g root /etc/labloop /usr/local/libexec"
+# Stage into root-owned directories, never world-writable /tmp.
+qga_push "$REPO/deploy/seccomp-labloop.json" /etc/labloop/.seccomp-next
+qga_push "$REPO/containers/mcp/entrypoint.sh" /usr/local/libexec/.labloop-mcp-next
+qga "install -m 0644 -o root -g root /etc/labloop/.seccomp-next \
          /etc/labloop/seccomp-labloop.json && \
-     install -m 0755 -o root -g root /tmp/labloop-entrypoint-root.sh \
+     install -m 0755 -o root -g root /usr/local/libexec/.labloop-mcp-next \
          /usr/local/libexec/labloop-mcp-entrypoint && \
-     rm -f /tmp/labloop-seccomp-root.json /tmp/labloop-entrypoint-root.sh"
+     rm -f /etc/labloop/.seccomp-next /usr/local/libexec/.labloop-mcp-next"
 
 note "quadlets + linger services"
 # lab-cnt-mcp lives in the mcp account's podman — invisible to lab.
