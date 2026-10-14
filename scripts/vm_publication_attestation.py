@@ -134,6 +134,9 @@ def provenance_data(sidecar: Path, manifest: Path, *,
         or signature.get("repository") != REPO
         or signature.get("signerWorkflow") != SIGNER
         or signature.get("workflowUrl") != WORKFLOW_URL
+        or signature.get("attestationLookupUrl") != (
+            f"https://api.github.com/repos/{REPO}/attestations/sha256:{digest}"
+        )
         or signature.get("predicateType") != PREDICATE
         or signature.get("mechanism") != "GitHub OIDC / Sigstore"
         or signature.get("declarationOnly") is not True
@@ -199,6 +202,9 @@ def create_provenance(sidecar: Path, *, version: str | None = None,
             "repository": REPO,
             "signerWorkflow": SIGNER,
             "workflowUrl": WORKFLOW_URL,
+            "attestationLookupUrl": (
+                f"https://api.github.com/repos/{REPO}/attestations/sha256:{digest}"
+            ),
             "predicateType": PREDICATE,
             "mechanism": "GitHub OIDC / Sigstore",
             "declarationOnly": True,
