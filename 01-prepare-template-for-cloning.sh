@@ -114,7 +114,7 @@ note "virt-sysprep $VM"
 # VSCodium machineid is regenerated on first launch. rm -rf is safe on
 # missing paths, unlike --delete.
 sudo virt-sysprep -d "$VM" \
-    --run-command 'rm -rf /home/lab/.local/share/opencode /home/lab/.cache/opencode /home/lab/.config/VSCodium/machineid /home/lab/.cache/sessions'
+    --run-command 'rm -rf /home/lab/.local/share/opencode /home/lab/.cache/opencode /home/lab/.config/VSCodium/machineid /home/lab/.cache/sessions /var/tmp/gnosislab-qga-*'
 
 # ------------------------------------------------------------------
 # 4. snapshot the sealed state — snp-vN continues pre-freeze numbering
