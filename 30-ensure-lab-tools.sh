@@ -199,6 +199,13 @@ ensure_vm() {
         rebuild_mcp_image "$vm" || { echo "  FAIL: trusted image rebuild failed"; return 1; }
     fi
 
+    # Restore desktop files before any MCP image checks. This is also
+    # the upgrade path for existing clones with missing launchers.
+    if ! bash "$REPO/scripts/ensure-vm-desktop.sh" "$vm"; then
+        echo "  FAIL: desktop restoration failed" >&2
+        return 1
+    fi
+
     # ports.env derives from the VM's OWN lab-img-mcp image — never the
     # repo: the render must match the vintage actually installed
     # (/opt/gnosislab on packaged images, /opt/ml-scientist on
@@ -230,7 +237,11 @@ ensure_vm() {
                     printf 'PublishPort=127.0.0.1:%s:%s\n' "${!v}" "${!v}"
                 done ) > "$WORK/mcp-ports.publish"
     else
-        echo "  FAIL: cannot derive MCP ports.env; refusing an insecure partial upgrade"
+        echo "  FAIL: cannot derive MCP ports.env from image or installed mcp config" >&2
+        echo "  inspect the guest image and trusted config:" >&2
+        echo "    python3 scripts/qga.py $vm exec 'su - mcp -c \"podman image exists lab-img-mcp\"'" >&2
+        echo "    python3 scripts/qga.py $vm exec 'ls -l /home/mcp/.config/labloop/ports.env'" >&2
+        echo "  refusing an insecure partial MCP upgrade; desktop restoration completed" >&2
         return 1
     fi
     # Only packaged images support the audited supervisor. Never copy
