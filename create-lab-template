@@ -763,7 +763,15 @@ note "VSCodium + Zoo Code + vscode-pdf"
 cod_deb=""; vsix_list=""
 if [ "$CACHE_UP" = 1 ]; then
     cod_deb=$(basename "$(ls -t "$CACHE_ROOT"/pkgs/codium_*.deb 2>/dev/null | head -1)" 2>/dev/null || true)
-    vsix_list="$(cd "$CACHE_ROOT/pkgs" 2>/dev/null && ls *.vsix 2>/dev/null | tr '\n' ' ')"
+    # A refreshed cache can retain older versions of the same extension.
+    # Install exactly one version of each requested extension, highest
+    # version first; do not let an old Zoo Code VSIX overwrite the latest.
+    for extension in ZooCodeOrganization.zoo-code tomoki1207.pdf; do
+        vsix=$(find "$CACHE_ROOT/pkgs" -maxdepth 1 -type f \
+                    -name "$extension-*.vsix" -printf '%f\n' | sort -V | tail -n 1)
+        [ -n "$vsix" ] || die "cache is missing required extension: $extension"
+        vsix_list="$vsix_list $vsix"
+    done
 fi
 if [ -n "$cod_deb" ]; then
     qga "curl -fsS -o '/tmp/$cod_deb' '$CACHE_URL/pkgs/$cod_deb' && \
@@ -795,11 +803,11 @@ fi
 # unencrypted in ~/.config/VSCodium — acceptable in a disposable lab
 # where no real secrets should be stored anyway.
 note "codium --password-store=basic (kill keyring prompts)"
-qga "sed -i 's|^Exec=/usr/share/codium/codium |Exec=/usr/share/codium/codium --password-store=basic |' \
-         /usr/share/applications/codium.desktop && \
-     printf '#!/bin/sh\nexec /usr/share/codium/codium --password-store=basic \"\$@\"\n' \
-         > /usr/local/bin/codium && \
-     chmod 755 /usr/local/bin/codium"
+# VSCodium's .deb layout changes between versions; find its packaged
+# desktop entry and executable rather than assuming codium.desktop exists.
+# Keep the package-managed files intact and write /usr/local overrides.
+qga_push "$REPO/deploy/configure-codium.py" /usr/local/libexec/labloop-configure-codium.py
+qga "python3 /usr/local/libexec/labloop-configure-codium.py"
 
 # LaTeX on the DRIVER too — the hostile-zone toolchain is for running
 # generated code, but the editor itself needs a local TeX install or it
