@@ -41,22 +41,65 @@ into the lab VM template. Their license texts ship inside the built image.
 - Copyright: SST / opencode contributors
 - Installed by: `create-lab-template` (npm package `@opencode/cli`, pinned)
 
+### gnosislab
+
+- License: Apache License 2.0
+- Copyright: the companion GnosisLab project (same maintainers)
+- Installed by: `containers/mcp/Containerfile`
+  (`uv pip install gnosislab==<pinned>` from PyPI; the wheel brings its own
+  dependency closure — `mcp`, `pydantic`, `httpx`, `starlette`, `uvicorn`,
+  and transitives — each under its own license)
+
+### duckduckgo-mcp-server
+
+- License: MIT License
+- Copyright: Nick Clyde / contributors
+- Installed by: `create-lab-template` (via `pipx`/`uvx` in the guest)
+
+### VSCodium extensions (Open VSX)
+
+Installed by `create-lab-template` from prefetched `.vsix` files; each
+extension ships under its own license as published on Open VSX:
+
+- `tomoki1207.pdf` — PDF viewer extension (MIT License)
+- `ZooCodeOrganization.zoo-code` — AI coding agent extension
+
+## Python packages baked into the container images
+
+The experiment image (`containers/experiment/Containerfile`) bakes the
+scientific stack: **numpy, pandas, scipy, scikit-learn** (BSD 3-Clause),
+**matplotlib** (PSF-based license), **reportlab** (BSD). The guest's
+trial wheelhouse (`selfbuild/prefetch-cache.sh`, `wheels/` layer) ships
+the same set plus `uv` and `duckduckgo-mcp-server`. All are fetched from
+PyPI at build time and retain their own licenses.
+
 ## Operating system and distribution packages
 
-The guest image is built on Linux Mint (Ubuntu/Debian base) and installs
-distribution packages including Podman (Apache-2.0), nftables (GPL-2.0), and
-TeX Live (LPPL and assorted free licenses). Operating-system packages retain
-their own licenses and ship their copyright files inside the image under
-`/usr/share/doc/<package>/copyright`.
+The guest image is built on Linux Mint (Ubuntu/Debian base, XFCE edition)
+and installs distribution packages including Podman (Apache-2.0),
+nftables (GPL-2.0), TeX Live (LPPL and assorted free licenses), pandoc
+(GPL-2.0+), Node.js/npm (Node.js license), bubblewrap (LGPL-2.0+), strace
+(LGPL-2.1+/GPL-2.0+), and DejaVu fonts (custom permissive license).
+Operating-system packages retain their own licenses and ship their
+copyright files inside the image under `/usr/share/doc/<package>/copyright`.
 
-The `python:3.12-slim` container base image is used for the experiment and MCP
-containers; it contains Debian packages and the Python runtime (PSF license),
-each under its own license.
+The `python:3.12-slim` container base image is used for the experiment and
+MCP containers; it contains Debian packages and the Python runtime (PSF
+license), each under its own license. The uv binary is copied from
+`ghcr.io/astral-sh/uv` and micromamba from `docker.io/mambaorg/micromamba`
+— both covered by their entries above.
 
 ## Bundled assets
 
 Any third-party fonts, icons, or similar assets vendored directly into this
 repository carry their own license files alongside the asset.
+
+Currently bundled:
+
+- `assets/opencode-wordmark-dark.png` — opencode brand wordmark, used as the
+  guest's desktop launcher icon for the bundled opencode tool. MIT License
+  (see `assets/LICENSE.opencode.txt` for the full license text and
+  provenance).
 
 ## Vendored reference documents
 

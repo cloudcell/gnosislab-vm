@@ -890,9 +890,13 @@ qga "install -m 0644 -o lab -g lab \
 
 note "opencode desktop launcher (cwd = ~/workspace)"
 qga_push "$REPO/assets/opencode-wordmark-dark.png" /tmp/opencode.png
+qga_push "$REPO/assets/LICENSE.opencode.txt" /tmp/opencode.LICENSE.txt
 qga "install -d -m 0755 -o lab -g lab /home/lab/.local/share/icons /home/lab/.local/share/applications && \
+     install -d -m 0755 /usr/local/share/licenses && \
      install -m 0644 -o lab -g lab /tmp/opencode.png \
          /home/lab/.local/share/icons/opencode.png && \
+     install -m 0644 /tmp/opencode.LICENSE.txt \
+         /usr/local/share/licenses/opencode-icon.LICENSE.txt && \
      install -m 0755 /srv/lab/workspace/ml-labloop/deploy/opencode-lab \
          /usr/local/bin/opencode-lab && \
      install -m 0755 -o lab -g lab \
@@ -901,7 +905,7 @@ qga "install -d -m 0755 -o lab -g lab /home/lab/.local/share/icons /home/lab/.lo
      install -m 0644 -o lab -g lab \
          /srv/lab/workspace/ml-labloop/deploy/opencode.desktop \
          /home/lab/.local/share/applications/opencode.desktop && \
-     rm -f /tmp/opencode.png"
+     rm -f /tmp/opencode.png /tmp/opencode.LICENSE.txt"
 qga_lab "dbus-run-session gio set /home/lab/Desktop/opencode.desktop \
      metadata::trusted true 2>/dev/null || true"
 
