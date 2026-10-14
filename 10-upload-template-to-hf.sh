@@ -13,6 +13,8 @@
 # to the bucket, sudo for sealing + reading the sealed image.
 #
 # usage: ./10-upload-template-to-hf.sh [template-domain] [bucket]
+#        ./10-upload-template-to-hf.sh --existing dist/<image>.qcow2 [bucket]
+#        --existing resumes a previously sealed export without VM changes.
 # env:   SKIP_SEAL=1  skip shutdown+seal (image must already be sealed)
 #        DISTDIR=...  where the artifact lands (default: ./dist)
 #        HF_CLI=...   path to hf binary if not on PATH
@@ -20,7 +22,15 @@
 set -euo pipefail
 cd "$(dirname "$0")"
 
-BUCKET="${2:-hf://buckets/LabLoopCommunity/lab-trials}"
+EXISTING=""
+if [ "${1:-}" = "--existing" ]; then
+    [ "$#" -ge 2 ] && [ "$#" -le 3 ] \
+        || { echo "usage: $0 --existing dist/<image>.qcow2 [bucket]" >&2; exit 1; }
+    EXISTING="$2"
+    BUCKET="${3:-hf://buckets/LabLoopCommunity/lab-trials}"
+else
+    BUCKET="${2:-hf://buckets/LabLoopCommunity/lab-trials}"
+fi
 DISTDIR="${DISTDIR:-$PWD/dist}"
 VIRSH="virsh -c qemu:///system"
 die()  { echo "10-upload: $*" >&2; exit 1; }
@@ -36,11 +46,21 @@ pick_template() {
     tail -n1 <<<"$names"
 }
 
-id -nG | grep -qw libvirt || exec sg libvirt -c "$0 $*"
-VM="${1:-$(pick_template)}"
-[ -n "$VM" ] || die "no lab-template-* domain found — build one with ./00-build-lab-template.sh"
-$VIRSH dominfo "$VM" >/dev/null 2>&1 || die "domain '$VM' not found"
-IMG="/var/lib/libvirt/images/$VM.qcow2"
+if [ -n "$EXISTING" ]; then
+    [ -f "$EXISTING" ] && [[ "$EXISTING" == *.qcow2 ]] \
+        || die "existing sealed QCOW2 not found: $EXISTING"
+    OUT="$(realpath "$EXISTING")"
+    IMAGE_NAME="$(basename "$OUT")"
+    [[ "$IMAGE_NAME" =~ ^(lab-template-[a-zA-Z0-9_.-]+)-[0-9]{8}T[0-9]{4}Z[.]qcow2$ ]] \
+        || die "existing image must have a template and UTC export timestamp in its filename"
+    VM="${BASH_REMATCH[1]}"
+else
+    id -nG | grep -qw libvirt || exec sg libvirt -c "$0 $*"
+    VM="${1:-$(pick_template)}"
+    [ -n "$VM" ] || die "no lab-template-* domain found — build one with ./00-build-lab-template.sh"
+    $VIRSH dominfo "$VM" >/dev/null 2>&1 || die "domain '$VM' not found"
+    IMG="/var/lib/libvirt/images/$VM.qcow2"
+fi
 
 # ------------------------------------------------------------------
 # hf CLI — PATH, HF_CLI override, or a private venv we bootstrap once
@@ -65,49 +85,62 @@ WHO="$("$HF" auth whoami 2>/dev/null | sed -n 's/.*user:[[:space:]]*//p' | head 
 note "template:  $VM"
 note "account:   $WHO"
 note "bucket:    $BUCKET"
-read -rp "    publish a sealed image of $VM to $BUCKET? [y/N] " a
+if [ -n "$EXISTING" ]; then
+    note "existing:  $OUT (no seal, snapshot or recompression)"
+    read -rp "    upload this existing image to $BUCKET? [y/N] " a
+else
+    read -rp "    publish a sealed image of $VM to $BUCKET? [y/N] " a
+fi
 case "$a" in [Yy]*) ;; *) die "aborted — nothing published";; esac
 
 # ------------------------------------------------------------------
 # publishing always locks lab+exp passwords inside the image first —
 # the hash is offline-crackable by anyone who downloads it
-if [ "${SKIP_SEAL:-0}" != "1" ]; then
-    note "sealing $VM (publish mode: password lock + sysprep + snp-* snapshot)"
-    LABLOOP_PUBLISH=1 ./01-prepare-template-for-cloning.sh "$VM"
+if [ -z "$EXISTING" ]; then
+    if [ "${SKIP_SEAL:-0}" != "1" ]; then
+        note "sealing $VM (publish mode: password lock + sysprep + snp-* snapshot)"
+        LABLOOP_PUBLISH=1 ./01-prepare-template-for-cloning.sh "$VM"
+    else
+        echo "    SKIP_SEAL=1 — '$VM' must already have locked passwords"
+    fi
+    [ "$($VIRSH domstate "$VM")" = "shut off" ] || die "$VM must be shut off"
+
+    TS="$(date -u +%Y%m%dT%H%MZ)"
+    OUT="$DISTDIR/$VM-$TS.qcow2"
+    mkdir -p "$DISTDIR"
+
+    note "flatten + compress -> $OUT"
+    sudo qemu-img convert -c -O qcow2 "$IMG" "$OUT"
+    sudo chown "$(id -u):$(id -g)" "$OUT"
+    note "checksum"
+    (cd "$DISTDIR" && sha256sum "$(basename "$OUT")" > "$(basename "$OUT").sha256")
 else
-    echo "    SKIP_SEAL=1 — hoping '$VM' was sealed with passwords locked"
+    [ -f "$OUT.sha256" ] || die "missing existing checksum: $OUT.sha256"
+    note "using existing sealed export (no VM or disk changes)"
 fi
-[ "$($VIRSH domstate "$VM")" = "shut off" ] || die "$VM must be shut off"
-
-# ------------------------------------------------------------------
-TS="$(date -u +%Y%m%dT%H%MZ)"
-OUT="$DISTDIR/$VM-$TS.qcow2"
-mkdir -p "$DISTDIR"
-
-note "flatten + compress -> $OUT"
-sudo qemu-img convert -c -O qcow2 "$IMG" "$OUT"
-sudo chown "$(id -u):$(id -g)" "$OUT"
-
-note "checksum"
-(cd "$DISTDIR" && sha256sum "$(basename "$OUT")" > "$(basename "$OUT").sha256")
-(cd "$DISTDIR" && sha256sum -c "$(basename "$OUT").sha256") \
+(cd "$(dirname "$OUT")" && sha256sum -c "$(basename "$OUT").sha256") \
     || die "image checksum verification failed"
 
 # Publish a human-readable, independently verifiable JSON manifest. Its own
 # digest is a third GitHub-signed subject (never merely an unsigned claim).
 note "publication provenance manifest"
 BUILD_INFO="$PWD/dist/$VM.build-info.json"
-if [ -f "$BUILD_INFO" ]; then
-    python3 scripts/vm_publication_attestation.py provenance-create \
-        "$OUT.sha256" --build-info "$BUILD_INFO" \
-        || die "cannot create provenance from build record"
-else
-    [ -n "${GNOSISLAB_VER:-}" ] \
-        || die "missing build record; explicitly set GNOSISLAB_VER for legacy template"
-    python3 scripts/vm_publication_attestation.py provenance-create \
-        "$OUT.sha256" --gnosislab-version "$GNOSISLAB_VER" \
-        || die "cannot create declared provenance"
+if [ ! -f "$OUT.provenance.json" ]; then
+    if [ -f "$BUILD_INFO" ]; then
+        python3 scripts/vm_publication_attestation.py provenance-create \
+            "$OUT.sha256" --build-info "$BUILD_INFO" \
+            || die "cannot create provenance from build record"
+    else
+        [ -n "${GNOSISLAB_VER:-}" ] \
+            || die "missing build record; set GNOSISLAB_VER to the known version"
+        python3 scripts/vm_publication_attestation.py provenance-create \
+            "$OUT.sha256" --gnosislab-version "$GNOSISLAB_VER" \
+            || die "cannot create declared provenance"
+    fi
 fi
+python3 scripts/vm_publication_attestation.py provenance-check \
+    "$OUT.sha256" --provenance "$OUT.provenance.json" \
+    || die "provenance inconsistent with image checksum"
 
 # GitHub OIDC attestation covers the exact image and small SHA-256 sidecar.
 # Official publishing: required by default, fail closed if GitHub is unavailable.
@@ -116,9 +149,14 @@ VM_ATTESTATION="${VM_ATTESTATION:-required}"
 case "$VM_ATTESTATION" in
     required)
         note "requesting signed publication attestation from GitHub"
-        python3 scripts/vm_publication_attestation.py request "$OUT" "$OUT.sha256" \
-            --provenance "$OUT.provenance.json" \
-            || die "attestation failed; nothing uploaded (community builders: VM_ATTESTATION=skip)"
+        if ! python3 scripts/vm_publication_attestation.py verify \
+                 "$OUT.sha256" --provenance "$OUT.provenance.json" >/dev/null 2>&1; then
+            python3 scripts/vm_publication_attestation.py request "$OUT" "$OUT.sha256" \
+                --provenance "$OUT.provenance.json" \
+                || die "attestation failed; nothing uploaded (community builders: VM_ATTESTATION=skip)"
+        else
+            echo "    existing signed image, checksum and provenance verified"
+        fi
         ;;
     skip)
         echo "    UNATTESTED COMMUNITY IMAGE: GitHub signature check explicitly skipped"

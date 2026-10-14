@@ -26,8 +26,7 @@ New template builds save `dist/<template>.build-info.json`, containing
 the resolved GnosisLab package version and the source commit used at the
 end of a successful build. The publishing script takes that value,
 preserving the distinction between `templateBuildCommit` and
-`publisherCheckoutCommit`. If the build record is missing, official
-publication stops unless the publisher explicitly supplies
+`publisherCheckoutCommit`. If the build record is missing, publication stops unless the publisher explicitly supplies
 `GNOSISLAB_VER=X.Y.Z`; such versions are labelled `publisher-declared`.
 
 To validate all three files after downloading:
@@ -38,31 +37,38 @@ python3 scripts/vm_publication_attestation.py verify image.qcow2.sha256 \
   --provenance image.qcow2.provenance.json
 ```
 
-### Backfill the already released October 14 image
+### Backfill an already released image using script 11
 
-The file `lab-template-20261014T0456Z-20261014T0539Z.qcow2` was
-published before this feature. **Do not download, reseal or reupload the
-7.18 GB disk.** Its existing local copy, checksum and release bucket
-are sufficient. On the trusted physical host, after merging this feature:
+The October 14 QCOW2 was published before signed provenance manifests
+were introduced. It can be backfilled without rebuilding or uploading
+its 7.18 GB disk again. After updating the repository, use the same
+standard `11-release-template.sh` command with `--backfill`:
 
 ```bash
 git switch master && git pull --ff-only
-IMAGE=dist/lab-template-20261014T0456Z-20261014T0539Z.qcow2
-(cd "$(dirname "$IMAGE")" && sha256sum -c "$(basename "$IMAGE").sha256")
-python3 scripts/vm_publication_attestation.py provenance-create \
-  "$IMAGE.sha256" --gnosislab-version 0.1.45
-python3 scripts/vm_publication_attestation.py request \
-  "$IMAGE" "$IMAGE.sha256" --provenance "$IMAGE.provenance.json"
-hf buckets cp "$IMAGE.provenance.json" \
-  "hf://buckets/cloudcell/LabLoop/$(basename "$IMAGE").provenance.json"
+GNOSISLAB_VER=0.1.45 ./11-release-template.sh --backfill \
+  lab-template-20261014T0456Z-20261014T0539Z.qcow2
 ```
 
-The historical version is explicitly *publisher-declared*, because
-the original completed build did not record version metadata for this
-feature. The new signed record binds the exact existing image digest
-and the new JSON, without modifying the previously released QCOW2.
+Script 11 locates the existing QCOW2 and checksum in `dist/`, verifies
+their integrity, compares the checksum against the already published
+checksum in the official bucket, creates provenance if missing, requests
+and verifies the GitHub signature, then uploads **only** the JSON file.
+The historical GnosisLab version is labelled `publisher-declared`,
+because its older build predated automated build-info recording.
+The existing VM, QCOW2 and checksum are not modified or uploaded again.
 
-**There is no need to re-upload the existing QCOW2 or checksum.**
+To resume a candidate upload that stopped after sealing or signing,
+use **only script 10** with its `--existing` option:
+
+```bash
+GNOSISLAB_VER=0.1.45 ./10-upload-template-to-hf.sh --existing \
+  dist/your-already-sealed-image.qcow2
+```
+
+Script 10 checks the existing checksum, creates and signs provenance
+(or verifies an existing signature) and uploads the three files. It
+never reboots, reseals or recompresses the existing QCOW2 in this mode.
 ## Automated official publication
 
 After the existing local build, the standard pipeline is:
@@ -82,36 +88,14 @@ Prerequisites for an official publisher:
 
 ## Recover an already-built image after a GitHub CLI error
 
-If publication stopped after image compression and checksum verification,
-the QCOW2 and its `.sha256` sidecar remain in `dist/`. Do **not**
-rebuild or reseal the VM. The GitHub signing workflow may already have
-succeeded although an old local `gh` cannot verify its attestation.
-
-1. Upgrade GitHub CLI from https://cli.github.com/ and check:
-   `gh attestation verify --help`.
-2. Verify the previously generated image and checksum locally.
-3. Resume the upload from exactly those existing files:
-
-```bash
-bash scripts/resume-vm-trial-upload.sh \
-  dist/lab-template-20261014T0456Z-20261014T0520Z.qcow2
-```
-
-The helper checks both the local SHA-256 checksum and the previously
-signed GitHub publication statement before asking to upload. It does
-not create a new signature, reseal a template or recompress an image.
-
-If the earlier attestation workflow did not succeed, sign the existing
-QCOW2 and sidecar without rebuilding:
-
-```bash
-python3 scripts/vm_publication_attestation.py request \
-  dist/your-image.qcow2 dist/your-image.qcow2.sha256
-```
-
-Then rerun the resume helper. Do not use `VM_ATTESTATION=skip` to
-publish an official Cloudcell image; that bypasses signing checks.
-\n## Independent and community builders
+If the upload stopped after compression, fix the host GitHub CLI
+(check `gh attestation verify --help`), then use
+`./10-upload-template-to-hf.sh --existing dist/<image>.qcow2`.
+This standard command verifies and reuses the existing image; it does
+not reseal the template, regenerate the QCOW2 or require an extra
+recovery executable. For an image that is **already public**, use
+`./11-release-template.sh --backfill <image>.qcow2` instead.
+## Independent and community builders
 
 **Local VM creation, cloning, export and import need no Cloudcell GitHub access.**
 

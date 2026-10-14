@@ -133,6 +133,8 @@ jobs:
           ruby -e 'require "yaml"; Dir[".github/workflows/*.{yml,yaml}"].each { |file| YAML.parse_file(file); puts "Valid YAML: #{file}" }'
       - name: Test VM publication attestation integration (offline)
         run: python3 -m unittest discover -s tests -p 'test_vm_publication_attestation.py' -v
+      - name: Test standard numbered publication workflows (offline)
+        run: python3 -m unittest discover -s tests -p 'test_standard_publication_scripts.py' -v
       - name: Enforce trusted-runtime asset isolation (offline)
         run: python3 -m unittest discover -s tests -p 'test_trusted_runtime_assets.py' -v
       - name: Verify fail-closed VM trial isolation preflight (offline)

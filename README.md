@@ -159,8 +159,8 @@ Run the numbered commands **on the Linux host** from the repository root unless 
 | `00-build-lab-template.sh` | Provision a template VM. |
 | `01-prepare-template-for-cloning.sh` | Shut down, scrub instance identity and prepare a template for cloning. |
 | `02-create-vm-from-template.sh <name>` | Clone a VM for a user or experiment. |
-| `10-upload-template-to-hf.sh` | Seal and upload a candidate image to the configured HF bucket. |
-| `11-release-template.sh` | Promote a candidate image to the configured release bucket. |
+| `10-upload-template-to-hf.sh` | Seal and upload a candidate image, or resume an existing export with `--existing dist/<image>.qcow2`, including signed provenance. |
+| `11-release-template.sh` | Promote a verified candidate with checksum and signed provenance; use `--backfill <image>.qcow2` for already-public legacy releases. |
 | `12-export-image-vmdk.sh <image> [--ova]` | Convert a sealed QCOW2 into VMDK, optionally OVA, for compatible alternative hypervisors. |
 | `20-import-lab-vm.sh <image> [name]` | Import a downloaded QCOW2 image. |
 | `30-ensure-lab-tools.sh <vm>\|all` | Reconcile tools/configuration on an existing VM. |
