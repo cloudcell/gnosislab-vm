@@ -163,14 +163,18 @@ qga true 2>/dev/null || die "guest-exec not usable in $VM"
 note "hostname = $VM"
 qga "hostnamectl set-hostname '$VM'"
 
-note "credentials: lab/lab + change-password nag at every login"
+note "credentials: one-time password for sealed images + change-password prompt"
 if qga "passwd -S lab" 2>/dev/null | grep -q ' L '; then
     pwchars='23456789abcdefghjkmnpqrstuvwxyz'
     tmp_pw="lab-$(tr -dc "$pwchars" </dev/urandom | head -c 4 || true)-$(tr -dc "$pwchars" </dev/urandom | head -c 4 || true)"
 else
     tmp_pw="lab"
 fi
-qga "echo 'lab:$tmp_pw' | chpasswd && passwd -l exp >/dev/null"
+qga "echo 'lab:$tmp_pw' | chpasswd && \
+     passwd -S lab | grep -q ' P ' && \
+     faillock --user lab --reset && \
+     chage -E -1 -I -1 lab && passwd -l exp >/dev/null" \
+    || die "failed to provision imported VM login"
 printf 'one-time password for %s (user lab): %s\n' "$VM" "$tmp_pw" > "$WORK/otp"
 sudo install -m 0400 -o "$(id -un)" -g "$(id -gn)" "$WORK/otp" \
     "/var/lib/libvirt/images/$VM.otp"
