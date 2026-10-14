@@ -147,11 +147,10 @@ rebuild_mcp_image() {
             -f /home/mcp/build/mcp/Containerfile /home/mcp/build/mcp' &&
         rm -rf /home/mcp/build" \
         || { echo "  FAIL: image build"; return 1; }
-    note "restarting lab-cnt-mcp on rebuilt image"
-    qga_exec "$vm" "su - mcp -c 'export XDG_RUNTIME_DIR=/run/user/\$(id -u);
-        systemctl --user restart lab-cnt-mcp'" \
-        || { echo "  FAIL: restart"; return 1; }
-    echo "  image rebuilt + zone restarted"
+    # The caller must first install the root-owned seccomp profile and
+    # supervisor, then render the new quadlet and restart exactly once.
+    # Restarting here could execute a compromised legacy workspace mount.
+    echo "  trusted image rebuilt; deferring restart until protected assets are installed"
 }
 
 ensure_vm() {
@@ -231,8 +230,8 @@ ensure_vm() {
                     printf 'PublishPort=127.0.0.1:%s:%s\n' "${!v}" "${!v}"
                 done ) > "$WORK/mcp-ports.publish"
     else
-        echo "  warn: cannot derive ports.env (no image, no installed copy) — mcp quadlet/ports push skipped"
-        : > "$WORK/mcp-ports.publish"
+        echo "  FAIL: cannot derive MCP ports.env; refusing an insecure partial upgrade"
+        return 1
     fi
     # Only packaged images support the audited supervisor. Never copy
     # legacy supervisor code from lab-writable workspace into a trusted
