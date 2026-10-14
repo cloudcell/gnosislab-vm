@@ -89,37 +89,14 @@ else
     die "template is NOT scrubbed — run ./01-prepare-template-for-cloning.sh first"
 fi
 
-cat > "$WORK/qga.py" <<'PYEOF'
-import base64, json, subprocess, sys, time
-dom, mode, args = sys.argv[1], sys.argv[2], sys.argv[3:]
-def qga(payload):
-    r = subprocess.run(["virsh","-c","qemu:///system","qemu-agent-command",
-                        dom, json.dumps(payload)],
-                       capture_output=True, text=True, check=True)
-    return json.loads(r.stdout)["return"]
-if mode == "ping":
-    print("agent-ok"); sys.exit(0)
-if mode == "exec":
-    user = None
-    if args[:1] == ["--as"]:
-        user, args = args[1], args[2:]
-    cmd = " ".join(args)
-    path, argv = ("/bin/su", ["-", user, "-c", cmd]) if user \
-                 else ("/bin/sh", ["-c", cmd])
-    pid = qga({"execute":"guest-exec","arguments":
-               {"path":path,"arg":argv,"capture-output":True}})["pid"]
-    for _ in range(300):
-        time.sleep(2)
-        st = qga({"execute":"guest-exec-status","arguments":{"pid":pid}})
-        if st.get("exited"):
-            sys.stdout.write(base64.b64decode(st.get("out-data","")or"").decode("utf-8","replace"))
-            sys.stderr.write(base64.b64decode(st.get("err-data","")or"").decode("utf-8","replace"))
-            sys.exit(st.get("exitcode",1))
-    sys.exit("guest-exec timeout")
-PYEOF
-qga()      { python3 "$WORK/qga.py" "$vm" exec "$@"; }
-qga_lab()  { python3 "$WORK/qga.py" "$vm" exec --as lab "$@"; }
-agent_ready() { python3 "$WORK/qga.py" "$vm" ping >/dev/null 2>&1; }
+# Shared guest-agent driver handles actual ping, retries, and errors.
+REPO="$(cd "$(dirname "$0")" && pwd)"
+QGA_DRIVER="$REPO/scripts/qga.py"
+[ -f "$QGA_DRIVER" ] || die "missing $QGA_DRIVER"
+qga() { python3 "$QGA_DRIVER" "$vm" exec "$@"; }
+qga_lab() { python3 "$QGA_DRIVER" "$vm" exec --as lab "$@"; }
+qga_push() { python3 "$QGA_DRIVER" "$vm" push "$@"; }
+agent_ready() { python3 "$QGA_DRIVER" "$vm" ping >/dev/null 2>&1; }
 
 # ------------------------------------------------------------------
 note "virt-clone $TEMPLATE -> $vm"
@@ -152,6 +129,7 @@ if grep -q '^lab:[!*]' "$WORK/clone-shadow"; then
 else
     note "local clone: restore development-only lab/lab before first boot"
     sudo virt-customize --no-network -d "$vm" \
+        --password-crypto sha512 \
         --password lab:password:lab \
         --run-command '/usr/sbin/faillock --user lab --reset 2>/dev/null || true'
 fi
@@ -220,43 +198,52 @@ echo "    otp written: $img_dir/$vm.otp (mode 400)"
 # user changed it some other way). Otherwise it reappears at every
 # login: nag until changed. NOTE: stamp = passwd -S lastchg taken AFTER
 # chpasswd — never `date` (TZ mismatch: passwd -S reports UTC days).
-qga "printf '%s\n' \
-       '#!/bin/bash' \
-       'for f in \"\$HOME\"/Desktop/*.desktop; do [ -e \"\$f\" ] || continue' \
-       '    gio set \"\$f\" metadata::trusted true 2>/dev/null' \
-       '    set -- \$(sha256sum \"\$f\" 2>/dev/null)' \
-       '    gio set \"\$f\" metadata::xfce-exe-checksum \"\$1\" 2>/dev/null' \
-       'done' \
-       'stamp=\$(cat \"\$HOME/.config/lab-pw-stamp\" 2>/dev/null)' \
-       'set -- \$(passwd -S \"\$USER\" 2>/dev/null); lastchg=\$3' \
-       'if [ -n \"\$stamp\" ] && [ \"\$lastchg\" != \"\$stamp\" ]; then' \
-       '    rm -f \"\$HOME/.config/autostart/lab-first-login.desktop\" \"\$HOME/.config/lab-pw-stamp\"' \
-       '    exit 0' \
-       'fi' \
-       'echo \"Please set a new login password (current password is your OTP).\"' \
-       'echo' \
-       'until passwd; do' \
-       '    echo' \
-       '    echo \"-- password not changed (wrong current password, or too short).\"' \
-       '    echo \"   Try again, or close this window to skip for now.\"' \
-       '    echo' \
-       'done' \
-       'rm -f \"\$HOME/.config/autostart/lab-first-login.desktop\" \"\$HOME/.config/lab-pw-stamp\"' \
-       'echo' \
-       'echo \"Password changed — this prompt will not appear again.\"' \
-       'sleep 3' \
-       > /usr/local/bin/lab-first-login && \
-     chmod 0755 /usr/local/bin/lab-first-login && \
-     mkdir -p /home/lab/.config/autostart && \
-     set -- \$(passwd -S lab) && echo \$3 > /home/lab/.config/lab-pw-stamp && \
-     printf '%s\n' \
-       '[Desktop Entry]' \
-       'Type=Application' \
-       'Name=Set lab password' \
-       'Exec=x-terminal-emulator -e /usr/local/bin/lab-first-login' \
-       'X-GNOME-Autostart-enabled=true' \
-       > /home/lab/.config/autostart/lab-first-login.desktop && \
-     chown -R lab:lab /home/lab/.config/autostart /home/lab/.config/lab-pw-stamp"
+# Transfer first-login hook as files, not an oversized guest-exec command.
+cat > "$WORK/lab-first-login" <<'FIRSTLOGIN'
+#!/bin/bash
+for f in "$HOME"/Desktop/*.desktop; do
+    [ -e "$f" ] || continue
+    gio set "$f" metadata::trusted true 2>/dev/null
+    set -- $(sha256sum "$f" 2>/dev/null)
+    gio set "$f" metadata::xfce-exe-checksum "$1" 2>/dev/null
+done
+stamp=$(cat "$HOME/.config/lab-pw-stamp" 2>/dev/null)
+set -- $(passwd -S "$USER" 2>/dev/null); lastchg=$3
+if [ -n "$stamp" ] && [ "$lastchg" != "$stamp" ]; then
+    rm -f "$HOME/.config/autostart/lab-first-login.desktop" "$HOME/.config/lab-pw-stamp"
+    exit 0
+fi
+echo "Please set a new login password (current password is your OTP)."
+echo
+until passwd; do
+    echo
+    echo "-- password not changed (wrong current password, or too short)."
+    echo "   Try again, or close this window to skip for now."
+    echo
+done
+rm -f "$HOME/.config/autostart/lab-first-login.desktop" "$HOME/.config/lab-pw-stamp"
+echo
+echo "Password changed — this prompt will not appear again."
+sleep 3
+FIRSTLOGIN
+cat > "$WORK/lab-first-login.desktop" <<'DESKTOP'
+[Desktop Entry]
+Type=Application
+Name=Set lab password
+Exec=x-terminal-emulator -e /usr/local/bin/lab-first-login
+X-GNOME-Autostart-enabled=true
+DESKTOP
+qga 'mkdir -p /home/lab/.config/autostart' || die "cannot prepare autostart"
+qga_push "$WORK/lab-first-login" /usr/local/bin/lab-first-login \
+    || die "cannot upload first-login script"
+qga_push "$WORK/lab-first-login.desktop" /home/lab/.config/autostart/lab-first-login.desktop \
+    || die "cannot upload first-login autostart"
+qga 'chmod 0755 /usr/local/bin/lab-first-login &&
+     set -- $(passwd -S lab) &&
+     test "$2" = P &&
+     printf "%s\n" "$3" > /home/lab/.config/lab-pw-stamp &&
+     chown lab:lab /home/lab/.config/autostart/lab-first-login.desktop /home/lab/.config/lab-pw-stamp' \
+    || die "cannot configure first-login password prompt"
 
 note "per-clone agent identity: wipe opencode/vscodium state"
 # opencode.db carries session/device identity — every clone must start
