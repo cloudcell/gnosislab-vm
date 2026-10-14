@@ -266,8 +266,14 @@ done
 note "ensuring current tooling (labloop-export, /incoming, batteries)"
 # clones from a template built before a tooling change carry the old
 # stack — idempotent, so harmless on current templates too
-"$(dirname "$0")/30-ensure-lab-tools.sh" "$vm" \
-    || echo "warn: ensure step failed — run ./30-ensure-lab-tools.sh $vm manually"
+# Restore UI independently of the trusted-zone upgrade, so a failed MCP
+# image preflight never leaves the clone with a blank desktop.
+bash "$REPO/scripts/ensure-vm-desktop.sh" "$vm" \
+    || die "desktop provisioning failed for $vm"
+if ! "$(dirname "$0")/30-ensure-lab-tools.sh" "$vm"; then
+    echo "WARN: tooling update failed for $vm (MCP readiness unverified)" >&2
+    echo "      retry: ./30-ensure-lab-tools.sh $vm" >&2
+fi
 
 note "check-lab-ready.sh inside $vm"
 set +e
