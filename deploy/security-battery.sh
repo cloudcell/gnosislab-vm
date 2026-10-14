@@ -216,6 +216,279 @@ else
     bad sudo-surface-scoped "lab has $NP exp/mcp NOPASSWD rules — expected 3"
 fi
 
+# --- trusted runtime asset integrity -----------------------------------
+# The lab agent can edit workspace files but must NOT edit the
+# supervisor or seccomp profile consumed by mcp's rootless Podman.
+# Files are readable so runtime can use them, but only root may write.
+for spec in \
+    "trusted-entrypoint-root-owned:/usr/local/libexec/labloop-mcp-entrypoint:0:755" \
+    "trusted-seccomp-root-owned:/etc/labloop/seccomp-labloop.json:0:644"; do
+    IFS=: read -r tag path want_uid want_mode <<<"$spec"
+    actual=$(stat -c '%u:%a' "$path" 2>/dev/null || true)
+    if [ "$actual" = "$want_uid:$want_mode" ] && [ -f "$path" ] \
+       && [ ! -L "$path" ] && [ ! -w "$path" ]; then
+        ok "$tag" "$path root-owned, not lab-writable"
+    else
+        bad "$tag" "$path: owner/mode=${actual:-missing}, expected $want_uid:$want_mode"
+    fi
+done
+
+# Check the installed mcp quadlet if accessible to the driver. Its
+# parent home directory can legitimately be private, so lack of read
+# access is a WARN, not a false PASS.
+MCP_UNIT=/home/mcp/.config/containers/systemd/lab-cnt-mcp.container
+if [ -r "$MCP_UNIT" ]; then
+    if grep -q '^SeccompProfile=/etc/labloop/seccomp-labloop.json
+# deterministic permission checks (no exp shell needed): verify the
+# invariant, not just a sampled attempt.
+MS_MODE=$(stat -c %a /srv/lab/mcp-state 2>/dev/null)
+MS_OWNER=$(stat -c %U /srv/lab/mcp-state 2>/dev/null)
+if [ "$MS_MODE" = "700" ] && [ "$MS_OWNER" = "mcp" ]; then
+    ok exp-cannot-read-mcp-state "mcp-state is mcp:mcp mode 700"
+else
+    bad exp-cannot-read-mcp-state "mcp-state is $MS_OWNER:$MS_MODE"
+fi
+
+# the DRIVER is fenced from trusted state too: lab (and therefore the
+# agent) must not read the raw DBs or admin the trusted container —
+# scientific state changes go through MCP tools only.
+if ls /srv/lab/mcp-state/ >/dev/null 2>&1; then
+    bad lab-reads-mcp-state "lab can list mcp-state — trusted zone not isolated"
+else
+    ok lab-cannot-read-mcp-state "mcp-state unreadable from lab shell"
+fi
+if podman container exists lab-cnt-mcp 2>/dev/null; then
+    bad lab-admins-mcp-zone "lab-cnt-mcp visible in lab's podman"
+else
+    ok lab-cannot-admin-mcp-zone "lab-cnt-mcp not in lab's podman store"
+fi
+
+WS_ACL=$(getfacl -p /srv/lab/workspace 2>/dev/null | grep 'user:exp:' | awk -F: '{print $3}')
+if [ "$WS_ACL" = "r-x" ] || [ "$WS_ACL" = "r--" ]; then
+    ok exp-cannot-write-workspace "exp ACL on workspace = $WS_ACL (no w)"
+else
+    bad exp-cannot-write-workspace "exp ACL on workspace = $WS_ACL"
+fi
+
+# exchange flow through the real channel: exec writes into the
+# container's /exchange mount (= host /srv/lab/exchange), lab reads it
+if $EXP_EXEC sh -c 'echo probe > /exchange/.probe' 2>/dev/null \
+   && [ "$(cat /srv/lab/exchange/.probe 2>/dev/null)" = "probe" ]; then
+    ok exchange-handoff "hostile wrote, lab read"
+    rm -f /srv/lab/exchange/.probe
+else
+    bad exchange-handoff "artifact did not cross /srv/lab/exchange"
+fi
+
+# same, one level deep: the default ACL must be o::rX (capital X =
+# traverse dirs). With o::r only, subdirectories are unreadable to
+# everyone but exp — observed breaking capture_bundle on nested paths.
+if $EXP_EXEC sh -c 'mkdir -p /exchange/.probe.d && echo ok > /exchange/.probe.d/f' 2>/dev/null \
+   && [ "$(cat /srv/lab/exchange/.probe.d/f 2>/dev/null)" = "ok" ]; then
+    ok exchange-subdir-handoff "hostile wrote nested dir, lab traversed"
+    # cleanup via the exec channel: the exp-created subdir is not
+    # lab-deletable (only /srv/lab/exchange itself is lab:rwx)
+    $EXP_EXEC rm -rf /exchange/.probe.d 2>/dev/null
+else
+    bad exchange-subdir-handoff "exchange subdirs not traversable (ACL o::rX missing)"
+fi
+
+# --- MCP published to loopback only ------------------------------------
+VM_IP=$(ip -4 -o addr show scope global | awk '{split($4,a,"/"); print a[1]; exit}')
+if [ -n "$VM_IP" ] && curl -m3 -sf "http://$VM_IP:28080/health" >/dev/null 2>&1; then
+    bad mcp-loopback-only "MCP answered on $VM_IP — published beyond loopback"
+else
+    ok mcp-loopback-only "28080 not bound on external iface"
+fi
+
+# --- extraction channel (labloop-export) --------------------------------
+# fail-closed probes for the pull-only export — every call below is
+# EXPECTED TO BE REFUSED. Staging dirs are provisioned by tmpfiles
+# (0700 per-owner): verify hostile can't poison them either.
+EXP_SBIN=/usr/local/sbin/labloop-export
+
+if $EXP_SBIN /etc/shadow >/dev/null 2>&1; then
+    bad export-path-gate "exported /etc/shadow — realpath gate broken"
+else
+    ok export-path-gate "/etc/shadow refused (outside /exchange)"
+fi
+
+ln -sf /srv/lab/mcp-state /srv/lab/exchange/.esc-link 2>/dev/null
+if $EXP_SBIN /srv/lab/exchange/.esc-link >/dev/null 2>&1; then
+    bad export-symlink-escape "followed symlink into mcp-state"
+else
+    ok export-symlink-escape "symlink -> mcp-state refused"
+fi
+rm -f /srv/lab/exchange/.esc-link
+
+if sudo -n $EXP_SBIN --all /etc/shadow >/dev/null 2>&1; then
+    bad export-arg-pin "sudo accepted --all + extra arg — arg-pin broken"
+else
+    ok export-arg-pin "sudoers arg-pin rejects extra args to --all"
+fi
+
+if $EXP_SBIN /srv/lab/mcp-state >/dev/null 2>&1; then
+    bad export-trusted-zone "path mode reached mcp-state"
+else
+    ok export-trusted-zone "mcp-state refused via path mode"
+fi
+
+U_ST=$(stat -c '%U:%a' /var/lib/labloop-export/user 2>/dev/null)
+R_ST=$(stat -c '%U:%a' /var/lib/labloop-export/root 2>/dev/null)
+if [ "$U_ST" = "lab:700" ] && [ "$R_ST" = "root:700" ]; then
+    ok export-staging-perms "staging tree lab:700 / root:700"
+else
+    bad export-staging-perms "staging perms user=$U_ST root=$R_ST"
+fi
+if touch /var/lib/labloop-export/root/.poison 2>/dev/null; then
+    rm -f /var/lib/labloop-export/root/.poison
+    bad export-staging-write "lab wrote into root staging — tamperable"
+else
+    ok export-staging-write "lab cannot write root staging"
+fi
+# note: the host-side manifest lexical gate (probe 5 in the plan) and
+# the guest->host nft fence (probe 6, covered above) are not testable
+# from inside the guest — they are verified host-side.
+
+# --- documented gaps ----------------------------------------------------
+if curl -m5 -s http://127.0.0.1:28080/mcp >/dev/null 2>&1; then
+    note bearer-auth-gap "MCP answers without token — auth unimplemented (known gap)"
+fi
+
+echo
+echo "== result: $pass PASS, $warn WARN, $fail FAIL =="
+exit "$fail"
+ "$MCP_UNIT" \
+       && grep -q '^Volume=/usr/local/libexec/labloop-mcp-entrypoint:/usr/local/bin/labloop-mcp:ro
+# deterministic permission checks (no exp shell needed): verify the
+# invariant, not just a sampled attempt.
+MS_MODE=$(stat -c %a /srv/lab/mcp-state 2>/dev/null)
+MS_OWNER=$(stat -c %U /srv/lab/mcp-state 2>/dev/null)
+if [ "$MS_MODE" = "700" ] && [ "$MS_OWNER" = "mcp" ]; then
+    ok exp-cannot-read-mcp-state "mcp-state is mcp:mcp mode 700"
+else
+    bad exp-cannot-read-mcp-state "mcp-state is $MS_OWNER:$MS_MODE"
+fi
+
+# the DRIVER is fenced from trusted state too: lab (and therefore the
+# agent) must not read the raw DBs or admin the trusted container —
+# scientific state changes go through MCP tools only.
+if ls /srv/lab/mcp-state/ >/dev/null 2>&1; then
+    bad lab-reads-mcp-state "lab can list mcp-state — trusted zone not isolated"
+else
+    ok lab-cannot-read-mcp-state "mcp-state unreadable from lab shell"
+fi
+if podman container exists lab-cnt-mcp 2>/dev/null; then
+    bad lab-admins-mcp-zone "lab-cnt-mcp visible in lab's podman"
+else
+    ok lab-cannot-admin-mcp-zone "lab-cnt-mcp not in lab's podman store"
+fi
+
+WS_ACL=$(getfacl -p /srv/lab/workspace 2>/dev/null | grep 'user:exp:' | awk -F: '{print $3}')
+if [ "$WS_ACL" = "r-x" ] || [ "$WS_ACL" = "r--" ]; then
+    ok exp-cannot-write-workspace "exp ACL on workspace = $WS_ACL (no w)"
+else
+    bad exp-cannot-write-workspace "exp ACL on workspace = $WS_ACL"
+fi
+
+# exchange flow through the real channel: exec writes into the
+# container's /exchange mount (= host /srv/lab/exchange), lab reads it
+if $EXP_EXEC sh -c 'echo probe > /exchange/.probe' 2>/dev/null \
+   && [ "$(cat /srv/lab/exchange/.probe 2>/dev/null)" = "probe" ]; then
+    ok exchange-handoff "hostile wrote, lab read"
+    rm -f /srv/lab/exchange/.probe
+else
+    bad exchange-handoff "artifact did not cross /srv/lab/exchange"
+fi
+
+# same, one level deep: the default ACL must be o::rX (capital X =
+# traverse dirs). With o::r only, subdirectories are unreadable to
+# everyone but exp — observed breaking capture_bundle on nested paths.
+if $EXP_EXEC sh -c 'mkdir -p /exchange/.probe.d && echo ok > /exchange/.probe.d/f' 2>/dev/null \
+   && [ "$(cat /srv/lab/exchange/.probe.d/f 2>/dev/null)" = "ok" ]; then
+    ok exchange-subdir-handoff "hostile wrote nested dir, lab traversed"
+    # cleanup via the exec channel: the exp-created subdir is not
+    # lab-deletable (only /srv/lab/exchange itself is lab:rwx)
+    $EXP_EXEC rm -rf /exchange/.probe.d 2>/dev/null
+else
+    bad exchange-subdir-handoff "exchange subdirs not traversable (ACL o::rX missing)"
+fi
+
+# --- MCP published to loopback only ------------------------------------
+VM_IP=$(ip -4 -o addr show scope global | awk '{split($4,a,"/"); print a[1]; exit}')
+if [ -n "$VM_IP" ] && curl -m3 -sf "http://$VM_IP:28080/health" >/dev/null 2>&1; then
+    bad mcp-loopback-only "MCP answered on $VM_IP — published beyond loopback"
+else
+    ok mcp-loopback-only "28080 not bound on external iface"
+fi
+
+# --- extraction channel (labloop-export) --------------------------------
+# fail-closed probes for the pull-only export — every call below is
+# EXPECTED TO BE REFUSED. Staging dirs are provisioned by tmpfiles
+# (0700 per-owner): verify hostile can't poison them either.
+EXP_SBIN=/usr/local/sbin/labloop-export
+
+if $EXP_SBIN /etc/shadow >/dev/null 2>&1; then
+    bad export-path-gate "exported /etc/shadow — realpath gate broken"
+else
+    ok export-path-gate "/etc/shadow refused (outside /exchange)"
+fi
+
+ln -sf /srv/lab/mcp-state /srv/lab/exchange/.esc-link 2>/dev/null
+if $EXP_SBIN /srv/lab/exchange/.esc-link >/dev/null 2>&1; then
+    bad export-symlink-escape "followed symlink into mcp-state"
+else
+    ok export-symlink-escape "symlink -> mcp-state refused"
+fi
+rm -f /srv/lab/exchange/.esc-link
+
+if sudo -n $EXP_SBIN --all /etc/shadow >/dev/null 2>&1; then
+    bad export-arg-pin "sudo accepted --all + extra arg — arg-pin broken"
+else
+    ok export-arg-pin "sudoers arg-pin rejects extra args to --all"
+fi
+
+if $EXP_SBIN /srv/lab/mcp-state >/dev/null 2>&1; then
+    bad export-trusted-zone "path mode reached mcp-state"
+else
+    ok export-trusted-zone "mcp-state refused via path mode"
+fi
+
+U_ST=$(stat -c '%U:%a' /var/lib/labloop-export/user 2>/dev/null)
+R_ST=$(stat -c '%U:%a' /var/lib/labloop-export/root 2>/dev/null)
+if [ "$U_ST" = "lab:700" ] && [ "$R_ST" = "root:700" ]; then
+    ok export-staging-perms "staging tree lab:700 / root:700"
+else
+    bad export-staging-perms "staging perms user=$U_ST root=$R_ST"
+fi
+if touch /var/lib/labloop-export/root/.poison 2>/dev/null; then
+    rm -f /var/lib/labloop-export/root/.poison
+    bad export-staging-write "lab wrote into root staging — tamperable"
+else
+    ok export-staging-write "lab cannot write root staging"
+fi
+# note: the host-side manifest lexical gate (probe 5 in the plan) and
+# the guest->host nft fence (probe 6, covered above) are not testable
+# from inside the guest — they are verified host-side.
+
+# --- documented gaps ----------------------------------------------------
+if curl -m5 -s http://127.0.0.1:28080/mcp >/dev/null 2>&1; then
+    note bearer-auth-gap "MCP answers without token — auth unimplemented (known gap)"
+fi
+
+echo
+echo "== result: $pass PASS, $warn WARN, $fail FAIL =="
+exit "$fail"
+ "$MCP_UNIT" \
+       && ! grep -Eq '^(SeccompProfile|Volume)=/srv/lab/workspace/.*(seccomp|entrypoint)' "$MCP_UNIT"; then
+        ok trusted-quadlet-mount "trusted runtime mounts use root-owned paths"
+    else
+        bad trusted-quadlet-mount "mcp quadlet has an unsafe trusted runtime path"
+    fi
+else
+    note trusted-quadlet-mount "mcp quadlet is not readable as lab; inspect as root"
+fi
+
 # --- host-side zone separation -----------------------------------------
 # deterministic permission checks (no exp shell needed): verify the
 # invariant, not just a sampled attempt.
