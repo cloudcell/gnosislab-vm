@@ -118,6 +118,13 @@ fi
 # (docs/e-plans/plan-20260930-1838Z--offline-build-prefetch.md)
 note "artifact preflight (prefetch-cache --ensure)"
 ./selfbuild/prefetch-cache.sh --ensure
+# Keep the resolved package pin consistent between cache and guest image.
+if [ -z "${GNOSISLAB_VER:-}" ] || [ "$GNOSISLAB_VER" = latest ]; then
+    VERSION_FILE="${XDG_CACHE_HOME:-$HOME/.cache}/labloop/gnosislab-version"
+    [ -s "$VERSION_FILE" ] || { echo "missing GnosisLab version marker: $VERSION_FILE" >&2; exit 1; }
+    GNOSISLAB_VER="$(cat "$VERSION_FILE")"
+    export GNOSISLAB_VER
+fi
 
 # transient read-only artifact endpoint for the guest: the preseed's
 # in-target apt, the image tarballs, wheelhouses and pkgs all pull from
