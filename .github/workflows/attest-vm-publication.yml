@@ -87,4 +87,5 @@ jobs:
         if: ${{ !inputs.validation_only }}
         env:
           ATTESTATION_URL: ${{ steps.attestation.outputs.attestation-url }}
-        run: echo "Publication attestation: $ATTESTATION_URL" >> "$GITHUB_STEP_SUMMARY"
+        run: |
+          echo "Publication attestation: $ATTESTATION_URL" >> "$GITHUB_STEP_SUMMARY"
