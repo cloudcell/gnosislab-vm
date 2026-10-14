@@ -3,11 +3,11 @@
 
 # GnosisLab-VM
 
-### A virtualized, isolated environment for GnosisLab research workflows
+### An isolated scientific research environment with protected research records and experiment execution
 
 **GnosisLab-VM images can run on Linux, Windows and macOS<sup>*</sup>**
 
-**Build a sealed KVM lab template once — clone a trusted sandbox for every experiment.**
+**Build a sealed KVM lab template once — clone a disposable research environment for each workflow.**
 
 [![DOI](https://img.shields.io/badge/DOI-10.5281%2Fzenodo.23351184-blue)](https://doi.org/10.5281/zenodo.23351184)
 [![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
@@ -19,7 +19,7 @@
 [![Discord](https://img.shields.io/discord/903850592957517835?logo=discord&label=Discord)](https://discord.com/invite/v9JVtpVuUT)
 [![Status: alpha](https://img.shields.io/badge/status-alpha-orange)](CHANGELOG.md)
 
-[Requirements](#requirements) · [Build locally](#getting-started-build-locally) · [Published image](#using-a-published-vm-image) · [Other hypervisors](#running-without-kvm-virtualbox-macos) · [Operations](#operations) · [MCP](#mcp-connectivity) · [Security](SECURITY.md) · [Citation](https://doi.org/10.5281/zenodo.23351184) · [GnosisLab](https://github.com/cloudcell/gnosislab) · [Docs](https://loop.cloudcell.workers.dev/docs)
+[Requirements](#requirements) · [Build locally](#getting-started-build-locally) · [Published image](#using-a-published-vm-image) · [Other hypervisors](#running-without-kvm-virtualbox-macos) · [Operations](#operations) · [MCP](#mcp-connectivity) · [Comparison](#how-gnosislab-vm-compares) · [Security](SECURITY.md) · [Citation](https://doi.org/10.5281/zenodo.23351184) · [GnosisLab](https://github.com/cloudcell/gnosislab) · [Docs](https://loop.cloudcell.workers.dev/docs)
 
 </div>
 
@@ -30,6 +30,8 @@
 GnosisLab-VM provides a KVM/libvirt virtual machine for running [GnosisLab](https://github.com/cloudcell/gnosislab) and AI-assisted or human-led experiments with additional isolation between the agent interface, trusted scientific services, and execution of potentially untrusted code. It includes a VM template builder, clone/import workflows, containerized execution environments, data-transfer tooling, and security/readiness checks.
 
 **GnosisLab is the scientific research-process runtime. GnosisLab-VM is its optional virtualized environment.** The core GnosisLab services can run without this repository. GnosisLab-VM does not orchestrate agents and does not guarantee containment against every threat.
+
+**Why this edition exists:** General-purpose agent sandboxes primarily constrain *execution and access*. GnosisLab-VM combines isolation with [GnosisLab](https://github.com/cloudcell/gnosislab)'s scientific-process records, evidence capture, experiment management and checks against actual execution. Its three guest trust zones separate interactive agents, trusted scientific services and untrusted experiment code. These controls make research activity more inspectable; they do **not** guarantee scientific truth or complete containment.
 
 ![GnosisLab-VM desktop preview](docs-pub/assets/Screenshot_2026-09-27_05-25-41.png)
 
@@ -46,6 +48,29 @@ GnosisLab-VM provides a KVM/libvirt virtual machine for running [GnosisLab](http
 The five GnosisLab services are **Agora**, **Arete**, **Zetesis**, **Episteme**, and **Anamnesis**. This environment separates research records from experimental execution, while GnosisLab itself supplies scientific state, provenance, and methodological controls.
 
 **Security boundary:** KVM is the host isolation layer. Containers, accounts, filesystem permissions, firewall rules, and constrained execution wrappers provide additional separation inside the guest. Agent-supplied code and returned artifacts remain untrusted. Anyone with guest administrative credentials can defeat in-guest boundaries; host security depends on QEMU, libvirt, the host kernel, configuration, and patching. See [Security](SECURITY.md) and [the guest security manual](deploy/SECURITY-MANUAL.md).
+
+## How GnosisLab-VM compares
+
+GnosisLab-VM is a **scientific research environment**, whereas [NVIDIA OpenShell](https://github.com/NVIDIA/OpenShell), [Docker Sandboxes](https://docs.docker.com/ai/sandboxes/) and [E2B](https://github.com/e2b-dev/E2B) primarily provide agent/code isolation and execution infrastructure. They can potentially host GnosisLab with additional integration. The table evaluates **native, documented capabilities**, not theoretical extensibility or relative security strength.
+
+| Feature provided out of the box | **GnosisLab-VM** | OpenShell | Docker Sandboxes | E2B |
+| --- | :---: | :---: | :---: | :---: |
+| GnosisLab scientific-process services included | ✅ | — | — | — |
+| Structured hypotheses, trials and research decisions | ✅ | — | — | — |
+| Execution evidence tied to scientific research records | ✅ | — | — | — |
+| Separate protected scientific services and untrusted experiment zone | ✅ | — | — | — |
+| Preconfigured interactive scientific research desktop | ✅ | — | ◐ | ◐ |
+| Full VM/hypervisor isolation available | ✅ | ◐ | ✅ | ✅ |
+| Read-only untrusted experiment rootfs | ✅ | ◐ | ◐ | ◐ |
+| Deny-by-default egress policies | — | ✅ | ✅ | — |
+| Provider credentials mediated outside agent workload | — | ✅ | ✅ | — |
+| General-purpose sandbox lifecycle SDK/API | — | ✅ | ✅ | ✅ |
+
+**Legend:** ✅ documented native feature; ◐ optional, partial or backend-dependent; — not a native documented capability. **A tick does not establish equal security or feature depth.** GnosisLab scientific functionality belongs to the [core runtime](https://github.com/cloudcell/gnosislab), which can run independently of this VM edition. OpenShell's VM isolation requires its MicroVM backend. E2B is cloud-oriented.
+
+**Where GnosisLab-VM differs:** research-process and execution-evidence integration, explicitly separated trusted/experiment zones, a persistent research desktop, disposable full-VM templates and deliberate host-controlled data extraction. **Where alternatives lead:** fine-grained egress controls, credential mediation, multi-backend APIs and hosted scaling. GnosisLab-VM's experiment zone currently permits public-network egress; security policy must be reviewed before handling confidential inputs.
+
+For a detailed architectural breakdown, further alternatives (Daytona, Kata Containers, Firecracker and gVisor), expanded tickmark matrices, cross-platform limitations and suggested hardening priorities, see **[Architecture and alternatives](docs-pub/ALTERNATIVES.md)**.
 
 ## Requirements
 
@@ -160,6 +185,7 @@ This project was previously called **LabLoop** or **ML-LabLoop**. Repository bra
 
 - [Build, import and operational workflow](WORKFLOW.md)
 - [Security policy and private vulnerability reporting](SECURITY.md)
+- [Architecture, competitors and feature comparison](docs-pub/ALTERNATIVES.md)
 - [Guest security model and operational rules](deploy/SECURITY-MANUAL.md)
 - [Data movement and extraction](deploy/DATA-MOVEMENT-MANUAL.md)
 - [Contributing](CONTRIBUTING.md)
