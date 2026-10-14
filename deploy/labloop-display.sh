@@ -8,6 +8,8 @@
 # and it repairs the mode if SPICE negotiated something else. This is a
 # lab, not a game: 30 Hz is a perfectly good refresh for a dashboard.
 set -u
+# Keep the preferred resolution even when the first XRandR probe races.
+# Each graphical session gets an independent attempt; failures are logged.
 
 [ -r /etc/labloop/display.conf ] && . /etc/labloop/display.conf
 X="${RES_X:-2560}"; Y="${RES_Y:-1440}"; HZ="${REFRESH:-75}"
@@ -24,6 +26,8 @@ done
 [ -n "$out" ] || exit 0
 
 mode="${X}x${Y}"
+log_fail() { logger -t labloop-display "requested ${mode}@${HZ} on ${out}: $*" 2>/dev/null || true; echo "labloop-display: $*" >&2; }
+
 
 # --fb + --panning are mandatory, not cosmetic: a bare --mode switch can
 # leave the X screen's panning region at the OLD geometry — the display
@@ -43,9 +47,12 @@ for r in $(xrandr 2>/dev/null | awk -v m="$mode" -v n="${mode}_${HZ}" \
 done
 
 if [ -n "$match" ]; then
-    xrandr --fb "$mode" --output "$out" --mode "$mode" \
-           --rate "$match" --panning "${X}x${Y}"
-    exit $?
+    if ! xrandr --output "$out" --mode "$mode" \
+             --rate "$match" --fb "$mode" --panning "${X}x${Y}"; then
+        log_fail "XRandR failed to select advertised mode"; exit 1
+    fi
+    xrandr --current | grep -Eq "^${mode}[[:space:]].*\\*" || { log_fail "mode not active"; exit 1; }
+    exit 0
 fi
 
 # not offered — synthesize a modeline and add it
@@ -57,7 +64,8 @@ params="$(cvt -r "$X" "$Y" "$HZ" 2>/dev/null \
 [ -n "$params" ] || params="$(gtf "$X" "$Y" "$HZ" 2>/dev/null \
     | sed -n 's/.*Modeline "[^"]*" *//p')"
 [ -n "$params" ] || exit 1
-xrandr --newmode "$name" $params 2>/dev/null
+xrandr --newmode "$name" $params 2>/dev/null || true
 xrandr --addmode "$out" "$name"
-xrandr --fb "$mode" --output "$out" --mode "$name" \
-       --panning "${X}x${Y}"
+xrandr --output "$out" --mode "$name" \
+       --fb "$mode" --panning "${X}x${Y}" || { log_fail "custom mode activation failed"; exit 1; }
+xrandr --current | grep -Eq "^${name}[[:space:]].*\\*" || { log_fail "custom mode not active"; exit 1; }

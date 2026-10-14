@@ -142,6 +142,29 @@ sudo virt-customize --no-network -d "$vm" \
         sed -i 's|^127\.0\.1\.1.*|127.0.1.1 $vm|' /etc/hosts; \
     else echo '127.0.1.1 $vm' >> /etc/hosts; fi"
 
+# Provision credentials before the greeter starts: a fast VM could display
+# the login screen while guest-agent provisioning is still pending.
+# A publication-sealed template intentionally has no reusable login password.
+sudo virt-cat -d "$vm" /etc/shadow > "$WORK/clone-shadow" \
+    || die "cannot inspect clone credentials; refusing unsafe fallback"
+if grep -q '^lab:[!*]' "$WORK/clone-shadow"; then
+    echo "    sealed template: retaining generated one-time credentials after boot"
+else
+    note "local clone: restore development-only lab/lab before first boot"
+    sudo virt-customize --no-network -d "$vm" \
+        --password lab:password:lab \
+        --run-command '/usr/sbin/faillock --user lab --reset 2>/dev/null || true'
+fi
+
+# Propagate the requested video preference even to older golden templates.
+# The guest display hook will independently select the active XRandR mode.
+REPO="$(cd "$(dirname "$0")" && pwd)"
+[ -f "$REPO/labloop.conf" ] && . "$REPO/labloop.conf"
+RES_X="${LABLOOP_RES_X:-2560}"; RES_Y="${LABLOOP_RES_Y:-1440}"
+$VIRSH dumpxml --inactive "$vm" > "$WORK/display-domain.xml"
+python3 "$REPO/scripts/vm_display_xml.py" "$WORK/display-domain.xml" "$RES_X" "$RES_Y"
+$VIRSH define "$WORK/display-domain.xml" >/dev/null
+
 note "booting $vm (first post-sysprep boot: agent takes ~60-90s)"
 $VIRSH start "$vm" >/dev/null
 for _ in $(seq 60); do agent_ready && break; sleep 5; done
@@ -172,7 +195,14 @@ if qga "passwd -S lab" 2>/dev/null | grep -q ' L '; then
 else
     tmp_pw="lab"
 fi
-qga "echo 'lab:$tmp_pw' | chpasswd && passwd -l exp >/dev/null"
+qga "echo 'lab:$tmp_pw' | chpasswd && \
+     passwd -S lab | grep -q ' P ' && \
+     faillock --user lab --reset && \
+     passwd -l exp >/dev/null" || die "failed to provision lab credentials"
+# Avoid a silent account-lock or expired-password failure at the greeter.
+qga "passwd -S lab | grep -q ' P ' && \
+     chage -E -1 -I -1 lab && \
+     passwd -S lab | grep -q ' P '" || die "lab login is not ready"
 
 # clone/OTP pair: the one-time password lives in a sidecar file next
 # to the clone's qcow2 — mode 400, operator-owned, one clone one file

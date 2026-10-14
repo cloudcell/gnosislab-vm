@@ -100,7 +100,7 @@ Development and build provenance are documented in [WORKFLOW.md](WORKFLOW.md). T
 git clone https://github.com/cloudcell/gnosislab-vm.git
 cd gnosislab-vm
 
-# Review VM sizing and display settings first.
+# Review VM sizing and display settings first (default: 2560x1440 @ 75 Hz).
 cat labloop.conf
 
 # Build, prepare and clone a guest.
@@ -109,9 +109,9 @@ cat labloop.conf
 ./02-create-vm-from-template.sh researcher
 ```
 
-A clone is conventionally named `lab-vm-researcher`. Start it with `virsh -c qemu:///system start lab-vm-researcher` or through `virt-manager`. The build and clone scripts perform readiness/security checks; verify the reported results instead of assuming completion means every control passed.
+A clone is conventionally named `lab-vm-researcher`. Start it with `virsh -c qemu:///system start lab-vm-researcher` or through `virt-manager`. The build and clone scripts perform readiness/security checks; verify the reported results instead of assuming completion means every control passed. A guest XRandR hook applies the configured mode at the LightDM greeter and desktop login; a SPICE viewer with automatic resizing enabled may subsequently request a different mode. Disable **View → Scale Display → Auto resize VM with window** in virt-manager if you need a fixed 2560×1440 desktop. Display failures are reported as `labloop-display` diagnostics in the guest journal.
 
-**Important credentials:** locally built templates may use an initial `lab`/`lab` login followed by a forced change; published images use sealed accounts and an importer-provisioned one-time credential. Never publish an unsealed VM image or distribute default credentials. Refer to [WORKFLOW.md](WORKFLOW.md) for release and import details.
+**Important credentials:** locally built, unsealed templates and their clones initialize `lab`/`lab`, followed by a first-login password-change prompt. Published images use sealed accounts and an importer-provisioned one-time credential; a local clone of a previously publication-sealed template also uses a unique one-time password. The one-time credential is recorded in the operator-only `<vm>.otp` sidecar file alongside the QCOW2. Never publish `lab/lab` or expose the OTP sidecar. Never publish an unsealed VM image or distribute default credentials. Refer to [WORKFLOW.md](WORKFLOW.md) for release and import details.
 
 **Optional offline build:** populate and verify the cache using `./selfbuild/prefetch-cache.sh` before running `LABLOOP_OFFLINE=1 ./00-build-lab-template.sh`. Keep caches and downloaded image artifacts out of version control.
 
