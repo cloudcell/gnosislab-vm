@@ -17,12 +17,14 @@ from ml_episteme_mcp.clients.local_executor import LocalExecutor
 
 try:
     ex = LocalExecutor(sandbox="full", trace_reads="off")
-    assert getattr(ex, "_vm_isolation", False), "unpatched trial executor"
+    if not getattr(ex, "_vm_isolation", False):
+        raise RuntimeError("unpatched trial executor")
     args = ex._sandbox_argv(["/bin/true"], None, Path("/opt/gnosislab/ports.env"))
-    assert "--unshare-net" in args and "--unshare-pid" in args
-    assert ["--tmpfs", "/state"] == args[args.index("--tmpfs", args.index("--tmpfs") + 1):
-                                         args.index("--tmpfs", args.index("--tmpfs") + 1) + 2] \
-        if args.count("--tmpfs") > 1 else False
+    if "--unshare-net" not in args or "--unshare-pid" not in args:
+        raise RuntimeError("trial network/process namespaces not isolated")
+    if not any(args[i:i + 2] == ["--tmpfs", "/state"]
+               for i in range(len(args) - 1)):
+        raise RuntimeError("trusted /state is visible to trial processes")
 except Exception as exc:
     raise SystemExit(
         "FATAL: GnosisLab VM trial isolation unavailable; "
