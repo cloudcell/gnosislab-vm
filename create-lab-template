@@ -891,6 +891,7 @@ else
 fi
 qga_push "$REPO/deploy/opencode.json" /tmp/opencode.json
 qga_push "$REPO/deploy/opencode.jsonc" /tmp/opencode.jsonc
+qga_push "$REPO/deploy/configure-host-models.py" /tmp/configure-host-models.py
 qga "install -d -m 0755 -o lab -g lab /home/lab/.config/opencode && \
      install -m 0644 -o lab -g lab /tmp/opencode.json \
          /home/lab/.config/opencode/opencode.json && \
