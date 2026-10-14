@@ -126,6 +126,11 @@ jobs:
           persist-credentials: false
       - name: Validate GitHub Actions supply-chain policy
         run: python3 scripts/check-workflow-supply-chain.py
+      - name: Validate GitHub Actions YAML syntax
+        shell: bash
+        run: |
+          set -euo pipefail
+          ruby -e 'require "yaml"; Dir[".github/workflows/*.{yml,yaml}"].each { |file| YAML.parse_file(file); puts "Valid YAML: #{file}" }'
       - name: Test VM publication attestation integration (offline)
         run: python3 -m unittest discover -s tests -p 'test_vm_publication_attestation.py' -v
 
