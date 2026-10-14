@@ -269,61 +269,102 @@ fetch_images() {
     rm -rf "$ctx"
 }
 
+# Reuse pip's HTTP cache between containers, allow slow CDN reads,
+# and retry transient failures. Never discard complete artifacts first.
+pip_download() {
+    local output=$1; shift
+    mkdir -p "$output" "$CACHE/pip-http"
+    podman run --rm -v "$output:/out:z" \
+        -v "$CACHE/pip-http:/pip-cache:z" -e PIP_CACHE_DIR=/pip-cache \
+        docker.io/library/python:3.12-slim \
+        pip --disable-pip-version-check --timeout 120 --retries 8 \
+        download -d /out "$@"
+}
+
 fetch_wheels() {
-    # download inside the target interpreter so wheel tags match the
-    # guest's py3.12 (host python may differ)
-    command -v podman >/dev/null || die "podman required (wheel downloads run in python:3.12-slim)"
-    note "wheels: trial-env + uvx closures (inside python:3.12-slim)"
-    podman run --rm -v "$CACHE/wheels:/out:z" docker.io/library/python:3.12-slim \
-        pip download --no-cache-dir -d /out/trial-env $TRIAL_PKGS
-    podman run --rm -v "$CACHE/wheels:/out:z" docker.io/library/python:3.12-slim \
-        pip download --no-cache-dir -d /out/uvx $UVX_PKGS
+    command -v podman >/dev/null || die "podman required"
+    note "wheels: trial-env + uvx closures (cached pip, 120s timeout, 8 retries)"
+    pip_download "$CACHE/wheels/trial-env" $TRIAL_PKGS
+    pip_download "$CACHE/wheels/uvx" $UVX_PKGS
     have_wheels || die "wheel layer incomplete"
 }
 
-# gnosislab is TTL=0: the trusted-zone wheelhouse + sdist re-pull on
-# EVERY online run (not just when the wheels/pkgs layers look stale),
-# so a built VM always carries the newest PyPI release. Cheap — ~20
-# small wheels + a config sdist — unlike the heavyweight layers.
-# The wheelhouse is wiped first so no stale transitive wheel can linger
-# into an offline --no-index install.
-fetch_gnosislab() {
+# Stage downloads and verify before replacing the installed cache.
+# Failed downloads preserve the previously validated wheelhouse/sdist.
+fetch_gnosislab() (
     command -v podman python3 curl >/dev/null || die "podman + python3 + curl required"
-    note "gnosislab==$GNOSISLAB_VER: fresh wheel closure + sdist (TTL=0)"
-    rm -rf "$CACHE/wheels/gnosislab"; mkdir -p "$CACHE/wheels/gnosislab"
-    podman run --rm -v "$CACHE/wheels:/out:z" docker.io/library/python:3.12-slim \
-        pip download --no-cache-dir -d /out/gnosislab \
-        "gnosislab==$GNOSISLAB_VER" uv
-    # the config payload (ports.env, ml-*.toml) ships ONLY in the sdist;
-    # the wheel is code-only. Resolve via the JSON API rather than
-    # guessing the packages/source URL so a missing version errors clearly.
-    local gmeta gurl
-    gmeta=$(curl -fsSL "https://pypi.org/pypi/gnosislab/$GNOSISLAB_VER/json") \
-        || die "pypi: gnosislab $GNOSISLAB_VER metadata fetch failed"
-    gurl=$(printf '%s' "$gmeta" | python3 -c '
-import json,sys
-print(next((u["url"] for u in json.load(sys.stdin)["urls"]
-            if u["packagetype"] == "sdist"), ""))')
-    [ -n "$gurl" ] || die "pypi: no sdist for gnosislab $GNOSISLAB_VER"
-    curl -fL --progress-bar \
-        -o "$CACHE/pkgs/gnosislab-${GNOSISLAB_VER}.tar.gz" "$gurl"
-    # superseded pins are dead weight and would satisfy stale globs
-    find "$CACHE/pkgs" -maxdepth 1 -name 'gnosislab-*.tar.gz' \
-        ! -name "gnosislab-${GNOSISLAB_VER}.tar.gz" -delete
-    # extract the config payload beside the sdist — render consumers
-    # (image bake ctx, diagnostics push) read the plain files
-    local gx; gx="$(mktemp -d)"
-    tar -xzf "$CACHE/pkgs/gnosislab-${GNOSISLAB_VER}.tar.gz" -C "$gx"
-    rm -rf "$CACHE/pkgs/gnosislab"; mkdir -p "$CACHE/pkgs/gnosislab"
-    cp "$gx"/gnosislab-*/ports.env "$gx"/gnosislab-*/ml-*.toml \
-        "$CACHE/pkgs/gnosislab/"
-    local diagnostics
-    for diagnostics in "$gx"/gnosislab-*/diagnostics; do
-        [ -d "$diagnostics" ] || continue
-        cp -a "$diagnostics" "$CACHE/pkgs/gnosislab/"
+    if [ "$MODE" = ensure ] && [ -z "$ONLY" ] \
+       && compgen -G "$CACHE/wheels/gnosislab/gnosislab-${GNOSISLAB_VER}-*.whl" >/dev/null \
+       && compgen -G "$CACHE/wheels/gnosislab/uv-*.whl" >/dev/null \
+       && [ -s "$CACHE/pkgs/gnosislab-${GNOSISLAB_VER}.tar.gz" ] \
+       && [ -s "$CACHE/pkgs/gnosislab/ports.env" ] \
+       && verify_manifest; then
+        say "gnosislab==$GNOSISLAB_VER: verified cache reused"
+        exit 0
+    fi
+    note "gnosislab==$GNOSISLAB_VER: staged wheel closure + sdist"
+    local stage gmeta gurl gsha actual config_dir
+    stage=$(mktemp -d "$CACHE/.gnosislab-prefetch.XXXXXXXX")
+    trap 'rm -rf "$stage"' EXIT
+    mkdir -p "$stage/wheels" "$stage/config" "$stage/extract"
+    pip_download "$stage/wheels" "gnosislab==$GNOSISLAB_VER" uv \
+        || die "PyPI wheel fetch failed after retries; existing cache preserved"
+    compgen -G "$stage/wheels/gnosislab-${GNOSISLAB_VER}-*.whl" >/dev/null \
+        || die "wheel closure missing gnosislab==$GNOSISLAB_VER"
+    compgen -G "$stage/wheels/uv-*.whl" >/dev/null \
+        || die "wheel closure missing uv"
+    gmeta=$(curl -fsSL --connect-timeout 15 --max-time 120 \
+        --retry 5 --retry-delay 2 --retry-all-errors \
+        "https://pypi.org/pypi/gnosislab/$GNOSISLAB_VER/json") \
+        || die "sdist metadata fetch failed; existing cache preserved"
+    read -r gurl gsha < <(printf '%s' "$gmeta" | python3 -c '
+import json, sys
+item=next((u for u in json.load(sys.stdin)["urls"] if u["packagetype"]=="sdist"), None)
+if item: print(item["url"], item["digests"]["sha256"])
+')
+    [ -n "$gurl" ] && [ -n "$gsha" ] || die "sdist metadata incomplete"
+    curl -fL --connect-timeout 15 --max-time 900 \
+        --retry 8 --retry-delay 2 --retry-all-errors \
+        -o "$stage/source.tar.gz" "$gurl" \
+        || die "sdist download failed; existing cache preserved"
+    actual=$(sha256sum "$stage/source.tar.gz" | cut -d' ' -f1)
+    [ "$actual" = "$gsha" ] || die "GnosisLab sdist SHA256 mismatch"
+    tar -xzf "$stage/source.tar.gz" -C "$stage/extract" \
+        || die "sdist extraction failed; existing cache preserved"
+    cp "$stage"/extract/gnosislab-*/ports.env \
+       "$stage"/extract/gnosislab-*/ml-*.toml "$stage/config/" \
+       || die "sdist missing required config"
+    for config_dir in "$stage"/extract/gnosislab-*/diagnostics; do
+        [ -d "$config_dir" ] || continue
+        cp -a "$config_dir" "$stage/config/"
     done
-    rm -rf "$gx"
-}
+    # Only switch the cache after all network operations and validations.
+    # Backups are kept in staging until every new directory is installed.
+    local published=0
+    rollback() {
+        if [ "$published" != 1 ]; then
+            if [ -d "$stage/previous-wheels" ]; then
+                rm -rf "$CACHE/wheels/gnosislab"
+                mv "$stage/previous-wheels" "$CACHE/wheels/gnosislab"
+            fi
+            if [ -d "$stage/previous-config" ]; then
+                rm -rf "$CACHE/pkgs/gnosislab"
+                mv "$stage/previous-config" "$CACHE/pkgs/gnosislab"
+            fi
+        fi
+        rm -rf "$stage"
+    }
+    trap rollback EXIT
+    mv "$CACHE/wheels/gnosislab" "$stage/previous-wheels"
+    mv "$stage/wheels" "$CACHE/wheels/gnosislab"
+    mv "$CACHE/pkgs/gnosislab" "$stage/previous-config"
+    mv "$stage/config" "$CACHE/pkgs/gnosislab"
+    mv "$stage/source.tar.gz" "$CACHE/pkgs/gnosislab-$GNOSISLAB_VER.tar.gz"
+    published=1
+    find "$CACHE/pkgs" -maxdepth 1 -name 'gnosislab-*.tar.gz' \
+        ! -name "gnosislab-$GNOSISLAB_VER.tar.gz" -delete
+    say "gnosislab==$GNOSISLAB_VER: validated artifacts published"
+)
 
 fetch_pkgs() {
     command -v curl npm python3 >/dev/null || die "curl + npm + python3 required"
@@ -393,9 +434,14 @@ if [ -n "$ONLY" ]; then
 else
     for l in "${LAYERS[@]}"; do
         s=$(status_line "$l")
-        if [ "$MODE" = refresh ] || [ "$s" != ok ]; then
-            [ "$s" = stale ] && say "$l: stale (>${LABLOOP_CACHE_MAX_AGE_HOURS:-24}h) — refreshing"
+        # Cache age is advisory in --ensure; only missing/pin-changed
+        # artifacts require network access. --refresh opts into updates.
+        if [ "$MODE" = refresh ] || [ "$s" = missing ] \
+             || { [ "$s" = stale ] && [ "${LABLOOP_CACHE_REFRESH_STALE:-0}" = 1 ]; }; then
+            [ "$s" = stale ] && say "$l: stale; explicitly refreshing"
             needs_fetch+=("$l")
+        elif [ "$s" = stale ]; then
+            say "$l: cached and complete (aged; use --refresh to update)"
         fi
     done
 fi
