@@ -147,11 +147,10 @@ rebuild_mcp_image() {
             -f /home/mcp/build/mcp/Containerfile /home/mcp/build/mcp' &&
         rm -rf /home/mcp/build" \
         || { echo "  FAIL: image build"; return 1; }
-    note "restarting lab-cnt-mcp on rebuilt image"
-    qga_exec "$vm" "su - mcp -c 'export XDG_RUNTIME_DIR=/run/user/\$(id -u);
-        systemctl --user restart lab-cnt-mcp'" \
-        || { echo "  FAIL: restart"; return 1; }
-    echo "  image rebuilt + zone restarted"
+    # The caller must first install the root-owned seccomp profile and
+    # supervisor, then render the new quadlet and restart exactly once.
+    # Restarting here could execute a compromised legacy workspace mount.
+    echo "  trusted image rebuilt; deferring restart until protected assets are installed"
 }
 
 ensure_vm() {
@@ -197,7 +196,7 @@ ensure_vm() {
     # the deliberate migration — the same pass then derives 28xxx and
     # pushes the package-era entrypoint.
     if [ "$REBUILD_IMAGE" = 1 ]; then
-        rebuild_mcp_image "$vm" || echo "  warn: image rebuild failed"
+        rebuild_mcp_image "$vm" || { echo "  FAIL: trusted image rebuild failed"; return 1; }
     fi
 
     # ports.env derives from the VM's OWN lab-img-mcp image — never the
@@ -231,29 +230,43 @@ ensure_vm() {
                     printf 'PublishPort=127.0.0.1:%s:%s\n' "${!v}" "${!v}"
                 done ) > "$WORK/mcp-ports.publish"
     else
-        echo "  warn: cannot derive ports.env (no image, no installed copy) — mcp quadlet/ports push skipped"
-        : > "$WORK/mcp-ports.publish"
+        echo "  FAIL: cannot derive MCP ports.env; refusing an insecure partial upgrade"
+        return 1
     fi
-    # packaged-image probe: entrypoint.sh is volume-mounted into the
-    # container from the workspace — pushing the package-era entrypoint
-    # to a pre-switch image breaks it (/opt/gnosislab absent, no console
-    # scripts). Vintage comes from the image itself, not port values.
+    # Only packaged images support the audited supervisor. Never copy
+    # legacy supervisor code from lab-writable workspace into a trusted
+    # executable path: an agent may already have changed it.
+    # A legacy VM requires --rebuild-mcp-image to migrate deliberately.
     local img_pkg=0
     qga_exec "$vm" "su - mcp -c 'podman image exists lab-img-mcp && \
         podman run --rm --entrypoint sh lab-img-mcp \
         -c \"test -d /opt/gnosislab\"'" >/dev/null 2>&1 && img_pkg=1
+    if [ "$img_pkg" != 1 ]; then
+        echo "  FAIL: legacy MCP image; refusing to promote agent-writable executable"
+        echo "  rebuild trusted MCP image explicitly with --rebuild-mcp-image"
+        return 1
+    fi
+
+    # Source comes from the trusted host checkout via guest-agent, NEVER
+    # from the driver-owned in-guest workspace. The files are installed
+    # as root and checked before any mcp service restart.
+    # Stage root-only, without trusting agent-writable /tmp paths.
+    qga_exec "$vm" "install -d -m 0755 -o root -g root /etc/labloop /usr/local/libexec" \
+        || { echo "  FAIL: trusted staging directories"; return 1; }
+    qga_push "$vm" "$REPO/containers/mcp/entrypoint.sh" /usr/local/libexec/.labloop-mcp-next
+    qga_push "$vm" "$REPO/deploy/seccomp-labloop.json" /etc/labloop/.seccomp-next
     if [ "$have_ports" = 1 ]; then
+        printf '%s\n' 'Volume=/usr/local/libexec/labloop-mcp-entrypoint:/usr/local/bin/labloop-mcp:ro' \
+            > "$WORK/mcp-entrypoint.mount"
         sed -e "/^@MCP_PORTS_PUBLISH@\$/r $WORK/mcp-ports.publish" \
             -e "/^@MCP_PORTS_PUBLISH@\$/d" \
+            -e "/^@MCP_ENTRYPOINT_VOLUME@\$/r $WORK/mcp-entrypoint.mount" \
+            -e "/^@MCP_ENTRYPOINT_VOLUME@\$/d" \
             "$REPO/deploy/quadlets/lab-cnt-mcp.container" \
             > "$WORK/lab-cnt-mcp.container"
         qga_push "$vm" \
             "$WORK/lab-cnt-mcp.container" /tmp/ensure-lab-cnt-mcp.container
         qga_push "$vm" "$WORK/ports.env" /tmp/ensure-ports.env
-    fi
-    if [ "$img_pkg" = 1 ]; then
-        qga_push "$vm" \
-            "$REPO/containers/mcp/entrypoint.sh" /tmp/ensure-entrypoint.sh
     fi
     qga_push "$vm" \
         "$REPO/deploy/labloop-mcp-watchdog" /tmp/ensure-watchdog
@@ -298,14 +311,10 @@ ensure_vm() {
         ports_inst="install -m 0644 -o mcp -g mcp /tmp/ensure-ports.env /home/mcp/.config/labloop/ports.env"
         quadlet_cmp="cmp -s /tmp/ensure-lab-cnt-mcp.container /home/mcp/.config/containers/systemd/lab-cnt-mcp.container"
     fi
-    # img_pkg=0 (pre-switch image): /tmp/ensure-entrypoint.sh was never
-    # pushed and the workspace copy must keep the old-vintage
-    # entrypoint — the mounted file runs inside the old image.
-    local entry_cmp="true" entry_inst="true"
-    if [ "$img_pkg" = 1 ]; then
-        entry_cmp="cmp -s /tmp/ensure-entrypoint.sh /srv/lab/workspace/ml-labloop/containers/mcp/entrypoint.sh"
-        entry_inst="install -m 0755 -o lab -g lab /tmp/ensure-entrypoint.sh /srv/lab/workspace/ml-labloop/containers/mcp/entrypoint.sh"
-    fi
+    # These protected assets must exist, be owned by root and match
+    # this host checkout. Existing workspace files are never executed.
+    local entry_cmp="cmp -s /usr/local/libexec/.labloop-mcp-next /usr/local/libexec/labloop-mcp-entrypoint && test \$(stat -c '%u:%a' /usr/local/libexec/labloop-mcp-entrypoint 2>/dev/null) = 0:755"
+    local seccomp_cmp="cmp -s /etc/labloop/.seccomp-next /etc/labloop/seccomp-labloop.json && test \$(stat -c '%u:%a' /etc/labloop/seccomp-labloop.json 2>/dev/null) = 0:644"
     local need=0
     qga_exec "$vm" "
         cmp -s /tmp/ensure-labloop-export /usr/local/sbin/labloop-export &&
@@ -341,6 +350,7 @@ ensure_vm() {
                /home/exp/.config/containers/systemd/lab-cnt-exp.container &&
         $quadlet_cmp &&
         $entry_cmp &&
+        $seccomp_cmp &&
         cmp -s /tmp/ensure-display.conf /etc/labloop/display.conf &&
         cmp -s /tmp/ensure-labloop-display.sh \
                /usr/local/libexec/labloop-display.sh &&
@@ -376,7 +386,9 @@ ensure_vm() {
             /usr/local/sbin/labloop-update-opencode &&
         install -m 0440 -o root -g root /tmp/ensure-labloop.sudoers /etc/sudoers.d/labloop &&
         install -m 0644 -o root -g root /tmp/ensure-labloop-tmpfiles.conf /etc/tmpfiles.d/labloop.conf &&
-        install -d -m 0755 /etc/labloop &&
+        install -d -m 0755 -o root -g root /etc/labloop /usr/local/libexec &&
+        install -m 0755 -o root -g root /usr/local/libexec/.labloop-mcp-next /usr/local/libexec/labloop-mcp-entrypoint &&
+        install -m 0644 -o root -g root /etc/labloop/.seccomp-next /etc/labloop/seccomp-labloop.json &&
         install -m 0644 -o root -g root /tmp/ensure-display.conf \
             /etc/labloop/display.conf &&
         install -m 0755 -o root -g root /tmp/ensure-labloop-display.sh \
@@ -443,8 +455,7 @@ ensure_vm() {
             /srv/lab/workspace/ml-labloop/deploy/labloop.sudoers &&
         install -m 0644 -o lab -g lab /tmp/ensure-labloop-tmpfiles.conf \
             /srv/lab/workspace/ml-labloop/deploy/labloop-tmpfiles.conf &&
-        install -d -o lab -g lab /srv/lab/workspace/ml-labloop/containers/mcp &&
-        $entry_inst" \
+        install -d -o lab -g lab /srv/lab/workspace/ml-labloop/containers/mcp" \
         || echo "  warn: workspace refresh failed (workspace absent?)"
 
     if ((${#diag_names[@]})); then
@@ -484,17 +495,19 @@ ensure_vm() {
                   /home/mcp/.config/containers/systemd/lab-cnt-mcp.container 2>/dev/null; then
             echo same
         else echo changed; fi" | tr -d '[:space:]')
+    # Any changed trusted executable or policy also requires a service
+    # restart: the old container may still be using the old mount/policy.
     if [ "$changed" = changed ]; then
-        note "mcp quadlet changed — updating + restarting lab-cnt-mcp"
+        note "mcp quadlet changed — installing protected configuration"
         qga_exec "$vm" "
             install -m 0644 -o mcp -g mcp /tmp/ensure-lab-cnt-mcp.container \
-                /home/mcp/.config/containers/systemd/lab-cnt-mcp.container &&
-            su - mcp -c 'XDG_RUNTIME_DIR=/run/user/\$(id -u) \
-                systemctl --user daemon-reload && systemctl --user restart lab-cnt-mcp'" \
-            || echo "  warn: mcp quadlet install/restart failed"
-    else
-        echo "  mcp quadlet already current"
+                /home/mcp/.config/containers/systemd/lab-cnt-mcp.container" \
+            || { echo "  FAIL: mcp quadlet install"; return 1; }
     fi
+    note "restarting trusted container on protected runtime configuration"
+    qga_exec "$vm" "su - mcp -c 'XDG_RUNTIME_DIR=/run/user/\$(id -u) \
+        systemctl --user daemon-reload && systemctl --user restart lab-cnt-mcp'" \
+        || { echo "  FAIL: trusted MCP restart"; return 1; }
     fi   # have_ports: quadlet block skipped when ports.env underivable
 
     # trusted-zone liveness watchdog (rc-11): exit-based recovery cannot

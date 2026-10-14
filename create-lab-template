@@ -626,6 +626,20 @@ qga "printf 'ML_EPISTEME_INGEST_TOKEN=%s\n' \"\$(head -c 32 /dev/urandom | base6
 #   unauthenticated). The quadlet EnvironmentFile= reads it here —
 #   must exist BEFORE lab-cnt-mcp starts or the supervisor restart-loops.
 
+# Install trusted runtime policy and supervisor outside lab-writable workspace,
+# before the mcp quadlet starts. No image rebuild is needed for supervisor fixes.
+# Keep root ownership so lab (and agents using lab's identity) cannot modify them.
+note "installing root-owned trusted MCP runtime assets"
+qga "install -d -m 0755 -o root -g root /etc/labloop /usr/local/libexec"
+# Stage into root-owned directories, never world-writable /tmp.
+qga_push "$REPO/deploy/seccomp-labloop.json" /etc/labloop/.seccomp-next
+qga_push "$REPO/containers/mcp/entrypoint.sh" /usr/local/libexec/.labloop-mcp-next
+qga "install -m 0644 -o root -g root /etc/labloop/.seccomp-next \
+         /etc/labloop/seccomp-labloop.json && \
+     install -m 0755 -o root -g root /usr/local/libexec/.labloop-mcp-next \
+         /usr/local/libexec/labloop-mcp-entrypoint && \
+     rm -f /etc/labloop/.seccomp-next /usr/local/libexec/.labloop-mcp-next"
+
 note "quadlets + linger services"
 # lab-cnt-mcp lives in the mcp account's podman — invisible to lab.
 # ports.env is pulled OUT of the loaded image (/opt/gnosislab on
@@ -641,8 +655,14 @@ printf '%s\n' "$PORTS_ENV_TXT" > "$WORK/ports.env"
       | while read -r v; do
             printf 'PublishPort=127.0.0.1:%s:%s\n' "${!v}" "${!v}"
         done ) > "$WORK/mcp-ports.publish"
+# Fresh templates always use the packaged GnosisLab image, so the
+# installed root-owned supervisor is the only permitted host override.
+printf '%s\n' 'Volume=/usr/local/libexec/labloop-mcp-entrypoint:/usr/local/bin/labloop-mcp:ro' \
+    > "$WORK/mcp-entrypoint.mount"
 sed -e "/^@MCP_PORTS_PUBLISH@\$/r $WORK/mcp-ports.publish" \
     -e "/^@MCP_PORTS_PUBLISH@\$/d" \
+    -e "/^@MCP_ENTRYPOINT_VOLUME@\$/r $WORK/mcp-entrypoint.mount" \
+    -e "/^@MCP_ENTRYPOINT_VOLUME@\$/d" \
     "$REPO/deploy/quadlets/lab-cnt-mcp.container" \
     > "$WORK/lab-cnt-mcp.container"
 qga_push "$WORK/lab-cnt-mcp.container" /tmp/lab-cnt-mcp.container

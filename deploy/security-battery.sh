@@ -216,6 +216,34 @@ else
     bad sudo-surface-scoped "lab has $NP exp/mcp NOPASSWD rules — expected 3"
 fi
 
+# --- trusted runtime asset integrity -----------------------------------
+# The lab account must not edit the supervisor or seccomp profile.
+for spec in \
+    "trusted-entrypoint-root-owned:/usr/local/libexec/labloop-mcp-entrypoint:0:755" \
+    "trusted-seccomp-root-owned:/etc/labloop/seccomp-labloop.json:0:644"; do
+    IFS=: read -r tag path want_uid want_mode <<<"$spec"
+    actual=$(stat -c '%u:%a' "$path" 2>/dev/null || true)
+    if [ "$actual" = "$want_uid:$want_mode" ] && [ -f "$path" ] \
+       && [ ! -L "$path" ] && [ ! -w "$path" ]; then
+        ok "$tag" "$path root-owned and not lab-writable"
+    else
+        bad "$tag" "$path owner/mode does not match root policy"
+    fi
+done
+
+# A private mcp home may prevent the lab user from reading the unit.
+MCP_UNIT=/home/mcp/.config/containers/systemd/lab-cnt-mcp.container
+if [ -r "$MCP_UNIT" ]; then
+    if grep -Fxq 'SeccompProfile=/etc/labloop/seccomp-labloop.json' "$MCP_UNIT" \
+       && grep -Fxq 'Volume=/usr/local/libexec/labloop-mcp-entrypoint:/usr/local/bin/labloop-mcp:ro' "$MCP_UNIT" \
+       && ! grep -Eq '^(SeccompProfile|Volume)=/srv/lab/workspace/.*(seccomp|entrypoint)' "$MCP_UNIT"; then
+        ok trusted-quadlet-mount "trusted runtime mounts use root-owned paths"
+    else
+        bad trusted-quadlet-mount "mcp quadlet has unsafe trusted runtime paths"
+    fi
+else
+    note trusted-quadlet-mount "mcp quadlet unreadable as lab; inspect as root"
+fi
 # --- host-side zone separation -----------------------------------------
 # deterministic permission checks (no exp shell needed): verify the
 # invariant, not just a sampled attempt.

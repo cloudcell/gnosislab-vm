@@ -26,7 +26,8 @@ DropCapability=all
 AddCapability=SYS_ADMIN
 # Default seccomp gates unshare/mount/etc. on CAP_SYS_ADMIN; this
 # profile allows the nested-namespace syscalls unconditionally.
-SeccompProfile=/srv/lab/workspace/ml-labloop/deploy/seccomp-labloop.json
+# Root-owned guest policy: never load a security profile from agent-writable workspace.
+SeccompProfile=/etc/labloop/seccomp-labloop.json
 NoNewPrivileges=true
 # Ports are rendered from the image's own ports.env at install time
 # (create-lab-template / 30-ensure expand @MCP_PORTS_PUBLISH@ — one
@@ -54,9 +55,10 @@ Volume=/srv/lab/incoming:/incoming:ro
 # exists, so an unpopulated volume degrades gracefully to the slim
 # interpreter instead of failing every spawn.
 Volume=/srv/lab/trial-env:/opt/trial-env
-# entrypoint from the repo payload, not the baked image copy — lets
-# supervisor fixes land without an image rebuild
-Volume=/srv/lab/workspace/ml-labloop/containers/mcp/entrypoint.sh:/usr/local/bin/labloop-mcp:ro
+# For packaged images, mount the root-owned supervisor copy provisioned from
+# the trusted build host. Legacy images use their baked-in entrypoint instead.
+# Rendered by create-lab-template / 30-ensure-lab-tools.sh.
+@MCP_ENTRYPOINT_VOLUME@
 # Liveness visibility (rc-11): marks the container unhealthy in
 # `podman ps` when episteme's loop stops answering. Quadlets do NOT
 # restart on unhealthy — the labloop-mcp-watchdog timer is the
