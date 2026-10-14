@@ -208,7 +208,7 @@ class PublicationTests(unittest.TestCase):
              patch.object(app, "run", side_effect=command), \
              patch.object(app, "verify") as verify:
             app.request(self.image, self.checksum)
-            verify.assert_called_once_with(self.checksum, expected=self.name, commit="a" * 40)
+            verify.assert_called_once_with(self.checksum, expected=self.name, commit="a" * 40, provenance=None)
 
 
 if __name__ == "__main__":
