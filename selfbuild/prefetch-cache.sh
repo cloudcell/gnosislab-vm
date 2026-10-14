@@ -71,20 +71,37 @@ case "${1:-}" in
     *) die "unknown flag '$1'" ;;
 esac
 
-# "latest" → newest PyPI release; a stale pin is exactly what TTL=0
-# exists to prevent. Offline runs cannot resolve — require a pin.
+# Resolve once and pass the selected version to the VM builder. Metadata
+# outages may reuse a previously selected version in normal --ensure.
 if [ "$GNOSISLAB_VER" = latest ]; then
-    [ "$OFFLINE" = 1 ] \
-        && die "GNOSISLAB_VER=latest cannot resolve offline — set GNOSISLAB_VER to a version"
-    GNOSISLAB_VER=$(curl -fsSL https://pypi.org/pypi/gnosislab/json \
-        | grep -oE '"version": *"[^"]+"' | head -1 \
-        | grep -oE '[0-9][0-9A-Za-z.-]*') \
-        && [ -n "$GNOSISLAB_VER" ] \
-        || die "cannot resolve latest gnosislab release from PyPI"
-    say "gnosislab: latest -> $GNOSISLAB_VER"
+    if [ "$OFFLINE" = 1 ]; then
+        [ -s "$CACHE/gnosislab-version" ] \
+            || die "offline build needs GNOSISLAB_VER or an existing version marker"
+        GNOSISLAB_VER=$(cat "$CACHE/gnosislab-version")
+    else
+        meta=$(curl -fsSL --connect-timeout 15 --max-time 120 \
+            --retry 5 --retry-delay 2 --retry-all-errors \
+            https://pypi.org/pypi/gnosislab/json) || meta=""
+        resolved=$(printf '%s' "$meta" | python3 -c \
+            'import sys,json; data=sys.stdin.read(); print(json.loads(data)["info"]["version"] if data else "")' \
+            2>/dev/null) || resolved=""
+        if [ -n "$resolved" ]; then
+            GNOSISLAB_VER="$resolved"
+        elif [ "$MODE" = ensure ] && [ -s "$CACHE/gnosislab-version" ]; then
+            GNOSISLAB_VER=$(cat "$CACHE/gnosislab-version")
+            say "WARN: PyPI metadata unavailable; using cached GnosisLab version $GNOSISLAB_VER"
+        else
+            die "cannot resolve current GnosisLab version; use GNOSISLAB_VER=<version>"
+        fi
+    fi
+    say "gnosislab: selected $GNOSISLAB_VER"
 fi
+[[ "$GNOSISLAB_VER" =~ ^[0-9][A-Za-z0-9.+_-]*$ ]] \
+    || die "unsafe GnosisLab version '$GNOSISLAB_VER'"
 
 mkdir -p "$CACHE"/{apt,images,wheels/{trial-env,uvx,gnosislab},pkgs/gnosislab}
+# Used by the template builder after prefetch to avoid resolving PyPI twice.
+mkdir -p "$REPO/dist"
 
 # ISO identity lives in mk-auto-iso.sh — eval its four assignments so a
 # Mint point-release bump can't drift the two scripts apart
@@ -498,6 +515,10 @@ for l in ${ONLY:-${LAYERS[*]}}; do
     esac
 done
 verify_manifest || die "manifest hash mismatch"
+# Keep one authoritative version across prefetch and template provisioning.
+if [ "$MODE" != verify ] && [ "$OFFLINE" != 1 ]; then
+    printf '%s\\n' "$GNOSISLAB_VER" > "$CACHE/gnosislab-version"
+fi
 
 if [ -n "$ONLY" ]; then
     echo "    preflight: layer '$ONLY' ok"
