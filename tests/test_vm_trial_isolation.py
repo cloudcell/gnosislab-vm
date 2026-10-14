@@ -29,10 +29,21 @@ class VmTrialIsolationTests(unittest.TestCase):
         self.assertNotIn("ML_EPISTEME_SANDBOX=none", text)
         self.assertIn("FATAL: GnosisLab VM trial isolation unavailable", text)
 
-    def test_vm_pinned_release_requires_follow_up(self):
+    def test_vm_uses_explicit_pin_or_resolves_latest_at_build_time(self):
         text = BUILDER.read_text()
-        # This PR must not silently bump pinned Python package dependencies.
-        self.assertIn('GNOSISLAB_VER="${GNOSISLAB_VER:-0.1.42}"', text)
+        # The VM builder now defaults to the latest published PyPI
+        # release. An operator may pin an exact, validated version via
+        # GNOSISLAB_VER; never require an obsolete hard-coded version.
+        self.assertIn('GNOSISLAB_VER="${GNOSISLAB_VER:-latest}"', text)
+        self.assertIn('if [ "$GNOSISLAB_VER" = latest ]; then', text)
+        self.assertIn(
+            "GNOSISLAB_VER=$(curl -fsSL https://pypi.org/pypi/gnosislab/json",
+            text,
+        )
+        self.assertIn(
+            'die "cannot resolve latest gnosislab release',
+            text,
+        )
 
 
 if __name__ == "__main__":
