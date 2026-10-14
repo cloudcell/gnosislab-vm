@@ -31,14 +31,27 @@ case "$VM" in
 esac
 REPO="$(cd "$(dirname "$0")" && pwd)"
 # gnosislab package pin — single source of truth for the trusted-zone
-# version; prefetch-cache.sh evals this line (bump here → new fetch)
-GNOSISLAB_VER="${GNOSISLAB_VER:-0.1.42}"
+# version; prefetch-cache.sh evals this line. "latest" resolves to the
+# newest PyPI release at build time so a template never bakes a stale
+# runtime; set GNOSISLAB_VER to a version to pin (required offline).
+GNOSISLAB_VER="${GNOSISLAB_VER:-latest}"
 ISO="${LABLOOP_ISO:-}"
 VIRSH="virsh -c qemu:///system"
 WORK="$(mktemp -d)"
 trap 'report_phases; rm -rf "$WORK"; [ -z "${CACHE_HTTP_PID:-}" ] || kill "$CACHE_HTTP_PID" 2>/dev/null; [ "${CACHE_RULE_ADDED:-0}" = 1 ] && sudo -n ufw delete allow in on virbr0 to 192.168.122.1 port 8777 proto tcp comment labloop-cache >/dev/null 2>&1; true' EXIT
 
 die()  { echo "create-lab-template: $*" >&2; exit 1; }
+# "latest" → newest PyPI release. TTL=0 for this package: prefetch
+# re-pulls it on every online run so a fresh VM never ships a stale
+# trusted-zone runtime.
+if [ "$GNOSISLAB_VER" = latest ]; then
+    GNOSISLAB_VER=$(curl -fsSL https://pypi.org/pypi/gnosislab/json \
+        | grep -oE '"version": *"[^"]+"' | head -1 \
+        | grep -oE '[0-9][0-9A-Za-z.-]*') \
+        && [ -n "$GNOSISLAB_VER" ] \
+        || die "cannot resolve latest gnosislab release — set GNOSISLAB_VER explicitly"
+    echo "==> gnosislab: resolved latest -> $GNOSISLAB_VER"
+fi
 # phase timing — each note() call closes the previous phase; the EXIT
 # trap prints the breakdown + total elapsed
 T0=$SECONDS; _pt=$T0
