@@ -19,7 +19,7 @@ class PublicationTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
-        self.name = "lab-template-20261014T1230Z.qcow2"
+        self.name = "lab-template-20261014T1230Z-20261014T1245Z.qcow2"
         self.image = Path(self.temp.name) / self.name
         self.image.write_bytes(b"test artifact")
         self.digest = hashlib.sha256(b"test artifact").hexdigest()
@@ -102,7 +102,7 @@ class PublicationTests(unittest.TestCase):
     def test_signed_manifest_is_required_when_provided(self):
         manifest = self.checksum.with_name(self.name + ".provenance.json")
         with patch.object(app, "run", side_effect=[
-            "a" * 40 + "\\n", "",
+            "a" * 40 + "\n", "",
         ]):
             app.create_provenance(self.checksum, version="0.1.45")
         self.assertEqual(
@@ -129,7 +129,7 @@ class PublicationTests(unittest.TestCase):
             app.verify(self.checksum, provenance=manifest)
 
     def test_manifest_tampering_and_wrong_commit_rejected(self):
-        with patch.object(app, "run", side_effect=["a" * 40 + "\\n", ""]):
+        with patch.object(app, "run", side_effect=["a" * 40 + "\n", ""]):
             manifest = app.create_provenance(self.checksum, version="0.1.45")
         with self.assertRaises(app.PublicationError):
             app.provenance_data(self.checksum, manifest, commit="b" * 40)
@@ -147,7 +147,7 @@ class PublicationTests(unittest.TestCase):
             "gnosislabVersion": "0.1.45",
             "vmBuilderCommit": "a" * 40,
         }))
-        with patch.object(app, "run", side_effect=["b" * 40 + "\\n", ""]):
+        with patch.object(app, "run", side_effect=["b" * 40 + "\n", ""]):
             manifest = app.create_provenance(self.checksum, build_info=build)
         data = app.provenance_data(self.checksum, manifest)
         self.assertEqual(data["software"]["gnosislabVersion"], "0.1.45")
@@ -161,13 +161,13 @@ class PublicationTests(unittest.TestCase):
             app.create_provenance(self.checksum)
 
     def test_manifest_digest_dispatched_for_signature(self):
-        with patch.object(app, "run", side_effect=["a" * 40 + "\\n", ""]):
+        with patch.object(app, "run", side_effect=["a" * 40 + "\n", ""]):
             manifest = app.create_provenance(self.checksum, version="0.1.45")
         def command(*args, **kwargs):
             if args == ("gh", "attestation", "verify", "--help"):
                 return "help"
             if args[:2] == ("git", "rev-parse"):
-                return "a" * 40 + "\\n"
+                return "a" * 40 + "\n"
             if args[:2] == ("git", "status"):
                 return ""
             if args[:2] == ("gh", "api"):
