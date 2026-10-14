@@ -32,7 +32,7 @@ def request(domain, payload, retries=5):
             time.sleep(min(2 ** attempt, 8))
 
 def run(domain, cmd, user=None, key=None):
-    identity = (user or "root") + "\0" + (key or "") + "\0" + cmd
+    identity = (user or "root") + "\0" + (key if key else cmd)
     tag = hashlib.sha256(identity.encode()).hexdigest()[:32] if key else secrets.token_hex(16)
     path = "/var/tmp/gnosislab-qga-" + (user or "root") + "-" + tag
     quoted = shlex.quote(path)
