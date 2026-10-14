@@ -46,6 +46,23 @@ def run(*args: str, stdin: str | None = None, timeout: int = 60) -> str:
     return done.stdout
 
 
+def ensure_gh_attestation_support() -> None:
+    """Fail before signing or publishing if the host gh cannot verify Sigstore."""
+    if not shutil.which("gh"):
+        raise PublicationError(
+            "GitHub CLI (gh) is missing; install or upgrade it from "
+            "https://cli.github.com/ before publishing"
+        )
+    try:
+        run("gh", "attestation", "verify", "--help", timeout=20)
+    except PublicationError as exc:
+        raise PublicationError(
+            "GitHub CLI lacks 'gh attestation verify'. Upgrade gh from "
+            "https://cli.github.com/ and confirm 'gh attestation verify --help' "
+            "works. The image and checksum remain usable; nothing uploaded."
+        ) from exc
+
+
 def checksum_info(path: Path, expected: str | None = None) -> tuple[str, str]:
     try:
         raw = path.read_text(encoding="ascii")
@@ -103,8 +120,7 @@ def matching_statement(
 def verify(sidecar: Path, *, expected: str | None = None,
            commit: str | None = None) -> None:
     name, digest = checksum_info(sidecar, expected)
-    if not shutil.which("gh"):
-        raise PublicationError("Install GitHub CLI (gh) to verify attestations")
+    ensure_gh_attestation_support()
     output = run(
         "gh", "attestation", "verify", str(sidecar.resolve()),
         "--repo", REPO, "--signer-workflow", SIGNER,
@@ -124,8 +140,9 @@ def request(image: Path, sidecar: Path) -> None:
     if not image.is_file():
         raise PublicationError(f"Image not found: {image}")
     name, digest = checksum_info(sidecar, image.name)
-    if not shutil.which("gh"):
-        raise PublicationError("Install gh, authenticate to Cloudcell, or set VM_ATTESTATION=skip")
+    # Preflight before dispatch. A legacy gh can successfully create
+    # a signing workflow and then fail to verify its attestation.
+    ensure_gh_attestation_support()
     commit = run("git", "rev-parse", "--verify", "HEAD").strip()
     if not COMMIT.fullmatch(commit):
         raise PublicationError("Not a valid publisher Git commit")
