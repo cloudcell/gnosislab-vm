@@ -9,6 +9,7 @@
 
 **Build a sealed KVM lab template once — clone a disposable research environment for each workflow.**
 
+[![SSRN](https://img.shields.io/badge/SSRN-preprint-blue)](https://doi.org/10.2139/ssrn.7573878)
 [![DOI](https://img.shields.io/badge/DOI-10.5281%2Fzenodo.23351184-blue)](https://doi.org/10.5281/zenodo.23351184)
 [![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 [![Hygiene](https://github.com/cloudcell/gnosislab-vm/actions/workflows/repository-hygiene.yml/badge.svg)](https://github.com/cloudcell/gnosislab-vm/actions/workflows/repository-hygiene.yml)
@@ -19,7 +20,16 @@
 [![Discord](https://img.shields.io/discord/903850592957517835?logo=discord&label=Discord)](https://discord.com/invite/v9JVtpVuUT)
 [![Status: alpha](https://img.shields.io/badge/status-alpha-orange)](CHANGELOG.md)
 
-[Requirements](#requirements) · [Build locally](#getting-started-build-locally) · [Published image](#using-a-published-vm-image) · [Other hypervisors](#running-without-kvm-virtualbox-macos) · [Operations](#operations) · [MCP](#mcp-connectivity) · [Comparison](#how-gnosislab-vm-compares) · [Security](SECURITY.md) · [Citation](https://doi.org/10.5281/zenodo.23351184) · [GnosisLab](https://github.com/cloudcell/gnosislab) · [Docs](https://loop.cloudcell.workers.dev/docs)
+[Requirements](#requirements) · [Build locally](#getting-started-build-locally) ·
+[Published image](#using-a-published-vm-image) ·
+[Other hypervisors](#running-without-kvm-virtualbox-macos) ·
+[Operations](#operations) · [MCP](#mcp-connectivity) ·
+[Comparison](#how-gnosislab-vm-compares) · [Security](SECURITY.md) ·
+[Citation](https://doi.org/10.5281/zenodo.23351184) ·
+[GnosisLab](https://github.com/cloudcell/gnosislab) ·
+[Paper](https://doi.org/10.2139/ssrn.7573878) ·
+[Discord](https://discord.gg/v9JVtpVuUT) ·
+[Docs](https://loop.cloudcell.workers.dev/docs)
 
 </div>
 
