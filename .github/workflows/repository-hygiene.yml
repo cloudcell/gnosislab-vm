@@ -15,6 +15,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
+          fetch-depth: 0  # Required to scan PR commit history
       - name: Validate Bash scripts (syntax only)
         shell: bash
         run: |
@@ -40,3 +41,13 @@ jobs:
             echo 'Obsolete primary branding/link detected' >&2
             exit 1
           fi
+      # Feature 2: keep secret detection inside the existing required status check.
+      - name: Scan Git commits for exposed secrets (Gitleaks)
+        uses: gitleaks/gitleaks-action@e0c47f4f8be36e29cdc102c57e68cb5cbf0e8d1e # v3
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITLEAKS_VERSION: "8.30.1"
+          # Do not disclose finding details via public PR comments/artifacts.
+          GITLEAKS_ENABLE_COMMENTS: "false"
+          GITLEAKS_ENABLE_UPLOAD_ARTIFACT: "false"
+          GITLEAKS_ENABLE_SUMMARY: "false"
