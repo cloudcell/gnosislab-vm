@@ -7,11 +7,115 @@ on:
 permissions:
   contents: read
 jobs:
+  # Static checks on shell scripts and container build definitions.
+  shell-security:
+    name: shell-security
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Install ShellCheck
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends shellcheck
+      - name: Check tracked shell scripts for high-severity errors
+        shell: bash
+        run: |
+          set -euo pipefail
+          count=0
+          while IFS= read -r -d '' file; do
+            test -f "$file" || continue
+            if [[ "$file" != *.sh ]] && ! head -c 128 "$file" | grep -Eq '^#!.*(ba)?sh([[:space:]]|$)'; then
+              continue
+            fi
+            echo "ShellCheck: $file"
+            shellcheck --severity=error -- "$file"
+            count=$((count + 1))
+          done < <(git ls-files -z)
+          test "$count" -gt 0 || { echo 'No shell scripts were checked' >&2; exit 1; }
+          echo "ShellCheck inspected $count scripts."
+
+  container-security:
+    name: container-security
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Lint untrusted experiment Containerfile (enforced errors)
+        uses: hadolint/hadolint-action@3fc49fb50d59c6ab7917a2e4195dba633e515b29 # v3.2.0
+        with:
+          dockerfile: containers/experiment/Containerfile
+          failure-threshold: error
+          no-color: true
+      - name: Lint trusted MCP Containerfile (enforced errors)
+        uses: hadolint/hadolint-action@3fc49fb50d59c6ab7917a2e4195dba633e515b29 # v3.2.0
+        with:
+          dockerfile: containers/mcp/Containerfile
+          failure-threshold: error
+          no-color: true
+      # Existing VM/container isolation decisions need manual security review.
+      # Trivy reports high/critical IaC findings; do not silently waive them.
+      # Enable a blocking exit code only after triaging documented legacy gaps.
+      - name: Scan container and infrastructure configuration (Trivy)
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          scan-type: config
+          scan-ref: .
+          format: table
+          severity: CRITICAL,HIGH
+          exit-code: '0'
+          hide-progress: true
+          cache: 'false'
+
+  codeql-python:
+    name: codeql-python
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      actions: read
+      security-events: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Initialize CodeQL for Python
+        uses: github/codeql-action/init@24c54180a607b1449ed407dd24f251e4e9147c8d # v4
+        with:
+          languages: python
+          build-mode: none
+          queries: security-extended
+      - name: Analyze Python
+        uses: github/codeql-action/analyze@24c54180a607b1449ed407dd24f251e4e9147c8d # v4
+        with:
+          category: /language:python
+
   repository-hygiene:
+    # The branch ruleset requires this specific job. Fail closed if any
+    # upstream scan fails, rather than allowing skipped jobs as passing checks.
+    if: ${{ always() }}
+    needs: [shell-security, container-security, codeql-python]
     name: repository-hygiene
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
+      - name: Require successful security analysis
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "${{ needs.shell-security.result }}" = success
+          test "${{ needs.container-security.result }}" = success
+          test "${{ needs.codeql-python.result }}" = success
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
