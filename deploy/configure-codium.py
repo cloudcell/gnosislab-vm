@@ -64,7 +64,7 @@ def configure(root: Path, package_files: list[str]) -> tuple[str, str]:
         source = candidates[0]
         body = (root / source.lstrip("/")).read_text(encoding="utf-8")
         body, count = re.subn(
-            r"(?m)^Exec=(?:\\"[^\\"]+\\"|\\S+)([^\\r\\n]*)$",
+            r'(?m)^Exec=(?:"[^"]+"|\S+)([^\r\n]*)$',
             lambda m: "Exec=" + WRAPPER + m.group(1),
             body,
         )
