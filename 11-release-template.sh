@@ -4,6 +4,9 @@
 # public release bucket.
 #
 #   ./11-release-template.sh [image-name] [--keep]
+#   ./11-release-template.sh --backfill <already-released-image.qcow2>
+#     Sign and upload provenance for an existing official release,
+#     using its locally retained QCOW2 without transferring it again.
 #
 # With no image name, lists the *.qcow2 objects in the source bucket
 # and shows a numbered menu. "Move" = copy both objects to the
@@ -22,6 +25,7 @@ cd "$(dirname "$0")"
 SRC="${SRC_BUCKET:-hf://buckets/LabLoopCommunity/lab-trials}"
 DST="${DST_BUCKET:-hf://buckets/cloudcell/LabLoop}"
 KEEP=0
+BACKFILL=0
 NAME=""
 
 die()  { echo "11-release: $*" >&2; exit 1; }
@@ -30,6 +34,7 @@ note() { echo; echo "==> $*"; }
 for a in "$@"; do
     case "$a" in
         --keep|-k) KEEP=1 ;;
+        --backfill) BACKFILL=1 ;;
         -h|--help) sed -n '2,18p' "$0"; exit 0 ;;
         *.qcow2)   NAME="$a" ;;
         *) die "unknown argument: $a" ;;
@@ -58,6 +63,88 @@ bucket_files() {  # bare object names in a bucket, one per line
     "$HF" buckets ls "$1" 2>/dev/null \
         | grep -oE '[^[:space:]]+\.(qcow2|sha256|json)' | sort -u
 }
+
+# Backfill an already-public legacy release without re-exporting, sealing
+# or uploading the QCOW2. Never silently invent a GnosisLab version.
+if [ "$BACKFILL" -eq 1 ]; then
+    [ "$KEEP" -eq 0 ] || die "--backfill cannot be combined with --keep"
+    [ -n "$NAME" ] || die "usage: $0 --backfill existing-image.qcow2"
+    [ "$DST" = "hf://buckets/cloudcell/LabLoop" ] \
+        || die "--backfill only supports the official public Cloudcell bucket"
+    [ "${VM_ATTESTATION:-required}" = required ] \
+        || die "--backfill requires GitHub signature verification"
+    LOCAL="$PWD/dist/$NAME"
+    SIDECAR="$LOCAL.sha256"
+    MANIFEST="$LOCAL.provenance.json"
+    [ -f "$LOCAL" ] && [ -f "$SIDECAR" ] \
+        || die "backfill requires existing dist/$NAME and its .sha256 on this host"
+    note "verifying existing local published image"
+    (cd "$PWD/dist" && sha256sum --check --status "$NAME.sha256") \
+        || die "local QCOW2 differs from its checksum"
+
+    dst_files="$(bucket_files "$DST")"
+    grep -qxF "$NAME" <<<"$dst_files" \
+        || die "$NAME is not present in the official public bucket"
+    grep -qxF "$NAME.sha256" <<<"$dst_files" \
+        || die "$NAME.sha256 is missing from the official public bucket"
+    remote_tmp="$(mktemp -d)"
+    trap 'rm -rf "$remote_tmp"' EXIT
+    "$HF" buckets cp "$DST/$NAME.sha256" "$remote_tmp/$NAME.sha256" \
+        || die "cannot retrieve published checksum"
+    cmp -s "$SIDECAR" "$remote_tmp/$NAME.sha256" \
+        || die "published checksum differs from local checksum; refusing backfill"
+    rm -rf "$remote_tmp"
+    trap - EXIT
+
+    if [ ! -f "$MANIFEST" ]; then
+        IMAGE_VM="${NAME%-????????T????Z.qcow2}"
+        BUILD_INFO="$PWD/dist/$IMAGE_VM.build-info.json"
+        if [ -f "$BUILD_INFO" ]; then
+            python3 scripts/vm_publication_attestation.py provenance-create \
+                "$SIDECAR" --build-info "$BUILD_INFO" \
+                || die "invalid completed template build record"
+        else
+            [ -n "${GNOSISLAB_VER:-}" ] \
+                || die "legacy release has no build record; set GNOSISLAB_VER to its known version"
+            python3 scripts/vm_publication_attestation.py provenance-create \
+                "$SIDECAR" --gnosislab-version "$GNOSISLAB_VER" \
+                || die "cannot create declared provenance"
+        fi
+    fi
+    python3 scripts/vm_publication_attestation.py provenance-check \
+        "$SIDECAR" --provenance "$MANIFEST" \
+        || die "provenance does not match the original image and sidecar"
+
+    if ! python3 scripts/vm_publication_attestation.py verify \
+         "$SIDECAR" --image-name "$NAME" --provenance "$MANIFEST" >/dev/null 2>&1; then
+        note "requesting signed provenance for already-published image"
+        python3 scripts/vm_publication_attestation.py request \
+            "$LOCAL" "$SIDECAR" --provenance "$MANIFEST" \
+            || die "GitHub attestation refused; nothing changed in the public bucket"
+    fi
+
+    if grep -qxF "$NAME.provenance.json" <<<"$dst_files"; then
+        remote_tmp="$(mktemp -d)"
+        trap 'rm -rf "$remote_tmp"' EXIT
+        "$HF" buckets cp "$DST/$NAME.provenance.json" "$remote_tmp/$NAME.provenance.json"
+        cmp -s "$MANIFEST" "$remote_tmp/$NAME.provenance.json" \
+            || die "remote provenance already exists and differs; refusing overwrite"
+        rm -rf "$remote_tmp"
+        trap - EXIT
+        echo "==> provenance already present and identical in $DST"
+        exit 0
+    fi
+    note "publishing signed JSON provenance only (no QCOW2 transfer)"
+    note "image: $NAME"
+    read -rp "    add signed provenance to $DST? [y/N] " a
+    case "$a" in [Yy]*) ;; *) die "aborted";; esac
+    "$HF" buckets cp "$MANIFEST" "$DST/$NAME.provenance.json" \
+        || die "JSON provenance upload failed"
+    bucket_files "$DST" | grep -qxF "$NAME.provenance.json" \
+        || die "JSON provenance not visible in destination"
+    echo "==> signed JSON provenance published; QCOW2 and checksum unchanged"
+    exit 0
+fi
 
 # ------------------------------------------------------------------
 # pick the image — argument wins; otherwise a numbered menu
