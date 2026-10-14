@@ -42,7 +42,7 @@ def run(domain, cmd, user=None, key=None):
         f"umask 077; mkdir -p {quoted}; "
         f"( flock -x 9; "
         f"if test -f {quoted}.rc; then exit 0; fi; "
-        f"if test -f {quoted}.started; then exit 96; fi; "
+        f"if test -f {quoted}.started; then touch {quoted}.interrupted; exit 96; fi; "
         f"touch {quoted}.started; "
         f"/bin/sh -c {shlex.quote(cmd)} > {quoted}.log 2>&1; "
         f"rc=$?; printf '%s\\n' \"$rc\" > {quoted}.rc.tmp; "
@@ -59,7 +59,7 @@ def run(domain, cmd, user=None, key=None):
     while time.monotonic() - start < timeout:
         try:
             # Use guest-file APIs rather than launching one extra process per poll.
-            for kind in ("log", "rc"):
+            for kind in ("log", "rc", "interrupted"):
                 file_path = path + "." + kind
                 try:
                     handle = request(domain, {"execute":"guest-file-open",
@@ -98,8 +98,10 @@ def run(domain, cmd, user=None, key=None):
                         finally:
                             request(domain, {"execute":"guest-file-close",
                                              "arguments":{"handle":handle}}, 1)
-                else:
+                elif kind == "rc":
                     return int(data.strip())
+                else:
+                    raise RuntimeError(f"guest job {path} was interrupted without a result; inspect guest package state before clearing its markers")
             last_ok = time.monotonic()
         except QGAError as exc:
             if time.monotonic() - last_ok > outage:
