@@ -196,7 +196,7 @@ ensure_vm() {
     # the deliberate migration — the same pass then derives 28xxx and
     # pushes the package-era entrypoint.
     if [ "$REBUILD_IMAGE" = 1 ]; then
-        rebuild_mcp_image "$vm" || echo "  warn: image rebuild failed"
+        rebuild_mcp_image "$vm" || { echo "  FAIL: trusted image rebuild failed"; return 1; }
     fi
 
     # ports.env derives from the VM's OWN lab-img-mcp image — never the
