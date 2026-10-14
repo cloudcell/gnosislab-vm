@@ -6,6 +6,33 @@ set -euo pipefail
 cd /opt/gnosislab
 set -a; source ./ports.env; set +a
 
+# Feature 7B: the experimental-code executor shares this container with
+# trusted scientific state. It MUST sandbox trial state and networking.
+# Do not silently run the historical GnosisLab 0.1.42 executor here.
+export ML_EPISTEME_TRIAL_ISOLATION=enforced
+export ML_EPISTEME_SANDBOX=full
+python3 - <<'PY'
+from pathlib import Path
+from ml_episteme_mcp.clients.local_executor import LocalExecutor
+
+try:
+    ex = LocalExecutor(sandbox="full", trace_reads="off")
+    if not getattr(ex, "_vm_isolation", False):
+        raise RuntimeError("unpatched trial executor")
+    args = ex._sandbox_argv(["/bin/true"], None, Path("/opt/gnosislab/ports.env"))
+    if "--unshare-net" not in args or "--unshare-pid" not in args:
+        raise RuntimeError("trial network/process namespaces not isolated")
+    if not any(args[i:i + 2] == ["--tmpfs", "/state"]
+               for i in range(len(args) - 1)):
+        raise RuntimeError("trusted /state is visible to trial processes")
+except Exception as exc:
+    raise SystemExit(
+        "FATAL: GnosisLab VM trial isolation unavailable; "
+        "install a verified GnosisLab release containing Feature 7B "
+        f"before starting trusted services ({exc})"
+    ) from exc
+PY
+
 mkdir -p /state/logs
 
 start() { # <name> <port-var> <gui-var>
