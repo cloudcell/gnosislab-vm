@@ -449,9 +449,9 @@ ensure_vm() {
         install -d -m 0755 -o lab -g lab /home/lab/.config/opencode &&
         install -m 0644 -o lab -g lab /tmp/ensure-opencode.json \
             /home/lab/.config/opencode/opencode.json &&
-        test -e /home/lab/.config/opencode/opencode.jsonc ||
-            install -m 0644 -o lab -g lab /tmp/ensure-opencode.jsonc \
-                /home/lab/.config/opencode/opencode.jsonc &&
+        { test -e /home/lab/.config/opencode/opencode.jsonc || \
+          install -m 0644 -o lab -g lab /tmp/ensure-opencode.jsonc \
+                /home/lab/.config/opencode/opencode.jsonc; } &&
         install -m 0755 -o lab -g lab /tmp/ensure-configure-host-models.py \
             /home/lab/Desktop/configure-host-models.py &&
         install -m 0440 -o lab -g lab /tmp/ensure-labloop.sudoers \
