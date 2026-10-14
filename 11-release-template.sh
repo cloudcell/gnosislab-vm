@@ -15,6 +15,7 @@
 # env:   SRC_BUCKET=...   default hf://buckets/LabLoopCommunity/lab-trials
 #        DST_BUCKET=...   default hf://buckets/cloudcell/LabLoop
 #        HF_CLI=...       path to hf binary if not on PATH
+#        VM_ATTESTATION=required (default), skip only for non-Cloudcell destinations
 set -euo pipefail
 cd "$(dirname "$0")"
 
@@ -77,10 +78,37 @@ grep -qxF "$NAME" <(printf '%s\n' "${images[@]}") \
     || die "$NAME not found in $SRC"
 
 SHA="$NAME.sha256"
-have_sha=0
-bucket_files "$SRC" | grep -qxF "$SHA" && have_sha=1
-[ "$have_sha" -eq 1 ] \
-    || echo "    WARNING: no $SHA sidecar in source — image will ship unchecksummed"
+VM_ATTESTATION="${VM_ATTESTATION:-required}"
+case "$VM_ATTESTATION" in
+    required|skip) ;;
+    *) die "VM_ATTESTATION must be required or skip" ;;
+esac
+# No release, including opt-out community releases, without a checksum.
+bucket_files "$SRC" | grep -qxF "$SHA" \
+    || die "source is missing $SHA; refusing unchecked release"
+have_sha=1
+# The official Cloudcell public bucket is always signed, even if skip was
+# accidentally exported in the shell. Independent destinations can opt out.
+if [ "$DST" = "hf://buckets/cloudcell/LabLoop" ] && [ "$VM_ATTESTATION" = skip ]; then
+    die "cannot skip signed verification for the official Cloudcell release bucket"
+fi
+
+# Download and verify only the small checksum sidecar, not the VM image.
+# The signed statement binds both the checksum file and image digest.
+if [ "$VM_ATTESTATION" = required ]; then
+    attest_dir="$(mktemp -d)"
+    trap 'rm -rf "$attest_dir"' EXIT
+    note "verifying signed GitHub publication declaration"
+    "$HF" buckets cp "$SRC/$SHA" "$attest_dir/$SHA" \
+        || die "could not download checksum sidecar for attestation"
+    python3 scripts/vm_publication_attestation.py verify "$attest_dir/$SHA" \
+        --image-name "$NAME" \
+        || die "no valid Cloudcell GitHub publication attestation; release refused"
+    rm -rf "$attest_dir"
+    trap - EXIT
+else
+    echo "    UNATTESTED COMMUNITY RELEASE: signature verification skipped explicitly"
+fi
 
 # ------------------------------------------------------------------
 # release is opt-in, every time — default answer is NO
