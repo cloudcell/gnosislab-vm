@@ -423,8 +423,7 @@ note "base packages"
 # (the prefetcher resolves its closure into the apt bundle). Add a
 # package here without adding it there and it silently falls back to
 # the mirror — fine online, dead in an offline build.
-python3 "$QGA_DRIVER" "$VM" exec --resume base-packages "${APT_PRELUDE}apt-get update -qq || true ; \
-     DEBIAN_FRONTEND=noninteractive apt-get install -y \
+python3 "$QGA_DRIVER" "$VM" exec --resume base-packages "${APT_PRELUDE}DEBIAN_FRONTEND=noninteractive apt-get install -y \
      podman uidmap acl pipx python-is-python3 git curl qemu-guest-agent \
      spice-vdagent mc nodejs npm nftables"
 # casper is the live-ISO bootstrapper left over by the unattended
@@ -894,7 +893,11 @@ if [ "$CACHE_UP" = 1 ] && compgen -G "$CACHE_ROOT/wheels/uvx/uv-*.whl" >/dev/nul
     qga "mkdir -p /tmp/uvx-wheels && cd /tmp/uvx-wheels && \
          for w in $uvx_list; do curl -fsS -o \"\$w\" \"$CACHE_URL/wheels/uvx/\$w\" || exit 1; done && \
          chown -R lab:lab /tmp/uvx-wheels"
-    qga_lab "pipx install /tmp/uvx-wheels/uv-*.whl"
+    # Choose one highest-version uv wheel; shell globs passed to pipx
+    # previously selected 0.12.21 even when 0.13.1 was cached.
+    uv_wheel="$(find "$CACHE_ROOT/wheels/uvx" -maxdepth 1 -name 'uv-*.whl' -printf '%f\n' | sort -V | tail -1)"
+    [ -n "$uv_wheel" ] || die "cache missing uv wheel"
+    qga_lab "pipx install --force '/tmp/uvx-wheels/$uv_wheel'"
     qga_lab "timeout 120 ~/.local/bin/uvx --no-index --find-links /tmp/uvx-wheels \
              duckduckgo-mcp-server </dev/null >/dev/null 2>&1 || true"
 else
