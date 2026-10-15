@@ -612,11 +612,11 @@ ensure_vm() {
             fail "cannot restore lab artifact-handoff ACL"
         for path in /srv/lab/workspace /srv/lab/incoming \
                     /srv/lab/exchange /srv/lab/experiments; do
-            su - exp -c "test -r \"\$1\" && test -x \"\$1\"" _ "$path" ||
+            su - exp -c "test -r \"$path\" && test -x \"$path\"" ||
                 fail "exp cannot read/traverse mount: $path"
         done
         for path in /srv/lab/exchange /srv/lab/experiments; do
-            su - exp -c "test -w \"\$1\"" _ "$path" ||
+            su - exp -c "test -w \"$path\"" ||
                 fail "exp cannot write experiment mount: $path"
         done
         su - exp -c "test ! -r /srv/lab/mcp-state/ingest.env" ||
