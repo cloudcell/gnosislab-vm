@@ -128,35 +128,25 @@ else
     warn dir:trial-env "/srv/lab/trial-env unpopulated — trials lack numpy/scipy stack"
 fi
 
-# --- display mode ------------------------------------------------------
-# /etc/labloop/display.conf carries the build-time target; the login
-# hook (labloop-display.sh) enforces it, injecting a modeline when the
-# requested rate is absent from the virtio EDID. Headless runs (QGA,
-# pre-login) get WARN not FAIL — there is no session to measure.
-RES_X=2560; RES_Y=1440; REFRESH=75
-[ -r /etc/labloop/display.conf ] && . /etc/labloop/display.conf
-mode="${RES_X}x${RES_Y}"
-xr="$(DISPLAY="${DISPLAY:-:0}" xrandr 2>/dev/null)"
-if [ -z "$xr" ]; then
-    warn display-mode "no X session — cannot measure (target $mode @ $REFRESH Hz)"
-elif printf '%s\n' "$xr" | grep -q "current ${RES_X} x ${RES_Y}"; then
-    # current rate = the '*' flag on the mode line. The hook may have
-    # injected a custom modeline named <mode>_<hz> (e.g. 2560x1440_75),
-    # so match that name too — otherwise cur stays empty and this FAILs
-    # even when the display is exactly right. Rate tolerance is 1% of
-    # the target: EDID/native timings for a nominal rate are fractional
-    # (74.94 for "75", 59.94 for "60"), and 1% absorbs all of that.
-    cur="$(printf '%s\n' "$xr" | awk -v m="$mode" -v n="${mode}_${REFRESH}" \
-        '($1==m || $1==n) {for(i=2;i<=NF;i++) if($i ~ /\*/) {gsub(/[*+]/,"",$i); print $i; exit}}')"
-    if [ -n "$cur" ] && awk -v a="$cur" -v b="$REFRESH" \
-            'BEGIN{d=a-b; if(d<0)d=-d; exit !(d <= b*0.01)}'; then
-        ok display-mode "Virtual-1 at $mode @ ${cur} Hz (target $REFRESH)"
-    else
-        bad display-mode "at $mode but ${cur:-?} Hz — expected ~$REFRESH Hz"
-    fi
+# --- display status -----------------------------------------------------
+# SPICE/virtio determines the active resolution. Headless QGA checks
+# cannot measure XRandR; report SKIP rather than a misleading warning.
+# A live desktop should be visible and functional, irrespective of Hz.
+if [ -e /etc/lightdm/lightdm.conf.d/50-labloop-display.conf ] ||
+   [ -e /etc/xdg/autostart/labloop-display.desktop ]; then
+    bad display-hook "obsolete forced XRandR hook present (black-screen risk)"
+elif [ -z "${DISPLAY:-}" ]; then
+    printf 'SKIP  %-34s %s\n' display-mode "headless; graphical session not present"
+elif ! command -v xrandr >/dev/null 2>&1; then
+    bad display-mode "xrandr unavailable in graphical session"
 else
-    got="$(printf '%s\n' "$xr" | sed -n 's/.*current \([0-9]* x [0-9]*\).*/\1/p')"
-    bad display-mode "current ${got:-?}, expected $mode @ $REFRESH Hz"
+    xr="$(xrandr 2>/dev/null)" || xr=""
+    if printf '%s\n' "$xr" | grep -qE ' connected'; then
+        current="$(printf '%s\n' "$xr" | sed -n 's/.*current \([0-9]* x [0-9]*\).*/\1/p')"
+        ok display-mode "connected graphical display ${current:-detected}; SPICE-managed"
+    else
+        bad display-mode "no connected graphical output reported by xrandr"
+    fi
 fi
 
 echo
