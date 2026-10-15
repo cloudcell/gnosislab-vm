@@ -88,9 +88,8 @@ What it does, in order:
    `30-ensure-lab-tools.sh`. If *it* woke the VM and nothing is staged,
    it runs `labloop-export --all` itself. On an already-running VM it
    refuses instead of quiescing your live lab — stage explicitly.
-4. **Picks the newest staged manifest** — but only under
-   `/var/lib/labloop-export/{root,user}/`. Any other path the guest
-   reports is rejected outright.
+4. **Selects a staged manifest** — by default, it prefers the user path-mode snapshot when one exists; `--all` explicitly generates and pulls a full snapshot. Only 
+   `/var/lib/labloop-export/{root,user}/` are considered. The default is **not** a newest-first selection. Never assume a tiny path-mode export contains the VM's research state.
 5. **Validates the manifest on the host** — format version, exact
    tarball name, 64-hex SHA-256, size ≤ 8 GiB, sane timestamp.
 6. **Pulls `export.tar.gz` to `*.partial`**, verifies the SHA-256,
@@ -157,3 +156,15 @@ move the old one.
 | `90-extract-lab-data.sh` | host | pull staged artifacts |
 | `80-ingest-lab-data.sh` | host | push files into `/srv/lab/incoming` |
 | `30-ensure-lab-tools.sh` | host | deploy/repair guest tooling on any clone |
+
+### Readiness probes never replace staged exports
+
+`functional-battery.sh` performs `labloop-export --self-test <exchange-file>` in a temporary private staging directory. It verifies the complete tarball and manifest round trip, then removes temporary artifacts. It never replaces `/var/lib/labloop-export/user/{manifest.json,export.tar.gz}`.
+
+For a deliberate full evidence snapshot from the host, run:
+
+```bash
+./90-extract-lab-data.sh --all lab-vm-rc-26 ./extracted
+```
+
+This full mode temporarily stops and restarts MCP/experiment services and may contain credentials, OpenCode sessions, and private datasets. Do not share an unredacted full export unless authorized and necessary. A plain `./90-extract-lab-data.sh <vm>` can return a deliberately staged path-only export.
