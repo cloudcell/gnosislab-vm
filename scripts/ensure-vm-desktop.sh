@@ -66,6 +66,21 @@ push "$REPO/deploy/diagnostics-README.md" /home/lab/Desktop/diagnostics/README.m
 push "$REPO/deploy/configure-host-models.py" /home/lab/Desktop/optional-patches/configure-host-models.py
 push "$REPO/deploy/probe-opencode-reasoning.py" /home/lab/Desktop/optional-patches/probe-opencode-reasoning.py
 push "$REPO/deploy/optional-patches-README.md" /home/lab/Desktop/optional-patches/README.md
+# Retire the historical duplicate only if it is an unmodified managed copy.
+# Never remove a customized desktop script or follow a symlink.
+qga 'duplicate=/home/lab/Desktop/configure-host-models.py
+    canonical=/home/lab/Desktop/optional-patches/configure-host-models.py
+    if [ -L "$duplicate" ]; then
+        echo "WARN: old Desktop configurator is a symlink; preserved" >&2
+    elif [ -f "$duplicate" ]; then
+        if cmp -s "$duplicate" "$canonical"; then
+            rm -f -- "$duplicate"
+            echo "  removed obsolete duplicate Desktop/configure-host-models.py"
+        else
+            echo "WARN: Desktop/configure-host-models.py differs from canonical optional-patches copy; preserved" >&2
+        fi
+    fi'
+
 
 # Additional cached reports (when present) and operator-provided
 # private patches are additive. Never infer model IDs or execute patches.
