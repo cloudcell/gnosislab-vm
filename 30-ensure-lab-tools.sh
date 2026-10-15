@@ -206,44 +206,61 @@ ensure_vm() {
         return 1
     fi
 
+    # Upgrade the GUI clock independently of trusted MCP health.
+    # Install from host checkout and clear the obsolete one-shot stamp.
+    qga_push "$vm" "$REPO/deploy/labloop-panel-clock.sh" /usr/local/libexec/labloop-panel-clock.sh
+    qga_push "$vm" "$REPO/deploy/labloop-panel-clock.desktop" /etc/xdg/autostart/labloop-panel-clock.desktop
+    qga_exec "$vm" 'chmod 0755 /usr/local/libexec/labloop-panel-clock.sh &&
+        chmod 0644 /etc/xdg/autostart/labloop-panel-clock.desktop &&
+        chown root:root /usr/local/libexec/labloop-panel-clock.sh /etc/xdg/autostart/labloop-panel-clock.desktop &&
+        rm -f /home/lab/.config/.labloop-clock-done &&
+        timedatectl set-timezone UTC' || { echo "  FAIL: UTC clock setup"; return 1; }
+
     # ports.env derives from the VM's OWN lab-img-mcp image — never the
     # repo: the render must match the vintage actually installed
     # (/opt/gnosislab on packaged images, /opt/ml-scientist on
     # pre-switch ones — the glob covers both). From the image, not
     # `podman exec`: the watchdog needs it when the container is down.
     # Fallback is the VM's installed copy — equally vintage-true.
-    local ports_env_txt
-    ports_env_txt=$(qga_exec "$vm" "su - mcp -c 'podman run --rm \
-        --entrypoint sh lab-img-mcp -c \"cat /opt/*/ports.env\"'" \
-        2>/dev/null | sed -n '/^ML_/p' || true)
+    # Run the image without network access, using a shell entrypoint.
+    # No remote image pull is permitted: source must be local to mcp.
+    local ports_env_txt img_probe
+    img_probe=$(qga_exec "$vm" "su - mcp -c 'podman image inspect lab-img-mcp >/dev/null 2>&1 &&
+        podman run --pull=never --network=none --rm --entrypoint /bin/sh lab-img-mcp -c \"cat /opt/gnosislab/ports.env\"'" 2>&1) || {
+        echo "  note: image port probe failed: $img_probe" >&2
+        img_probe=""
+    }
+    ports_env_txt=$(printf '%s\n' "$img_probe" | sed -n '/^ML_[A-Z_]*=/p')
     if [ -z "$ports_env_txt" ]; then
-        ports_env_txt=$(qga_exec "$vm" \
-            "cat /home/mcp/.config/labloop/ports.env 2>/dev/null" || true)
+        echo "  note: trying previously provisioned mcp-owned ports.env"
+        ports_env_txt=$(qga_exec "$vm" "cat /home/mcp/.config/labloop/ports.env" 2>/dev/null || true)
     fi
-    local have_ports=0
-    if [ -n "$ports_env_txt" ]; then
-        have_ports=1
-        printf '%s\n' "$ports_env_txt" > "$WORK/ports.env"
-        case "$ports_env_txt" in
-            *ML_AGORA_PORT=38*)
-                echo "  note: image is 38xxx-vintage — run --rebuild-mcp-image to migrate to gnosislab/28xxx" ;;
-        esac
-        # render the mcp quadlet's publish block — the file is a
-        # template (@MCP_PORTS_PUBLISH@); verbatim push would leave an
-        # unexpanded placeholder in the guest's quadlet.
-        ( set -a; . "$WORK/ports.env"; set +a
-          grep -oE '^ML_[A-Z_]+_PORT' "$WORK/ports.env" \
-              | while read -r v; do
-                    printf 'PublishPort=127.0.0.1:%s:%s\n' "${!v}" "${!v}"
-                done ) > "$WORK/mcp-ports.publish"
-    else
-        echo "  FAIL: cannot derive MCP ports.env from image or installed mcp config" >&2
-        echo "  inspect the guest image and trusted config:" >&2
-        echo "    python3 scripts/qga.py $vm exec 'su - mcp -c \"podman image exists lab-img-mcp\"'" >&2
-        echo "    python3 scripts/qga.py $vm exec 'ls -l /home/mcp/.config/labloop/ports.env'" >&2
-        echo "  refusing an insecure partial upgrade; desktop restoration completed" >&2
+    # A missing file is not grounds to invent new values. If the
+    # installed image is missing or incomplete, rebuild explicitly
+    # from the verified local artifact cache via --rebuild-mcp-image.
+    if [ -z "$ports_env_txt" ]; then
+        echo "  FAIL: cannot derive MCP ports.env from trusted image or installed config" >&2
+        echo "  refusing an insecure partial upgrade" >&2
+        echo "  Repair: verify the VM has lab-img-mcp, then use:" >&2
+        echo "    ./30-ensure-lab-tools.sh $vm --rebuild-mcp-image" >&2
         return 1
     fi
+    printf '%s\n' "$ports_env_txt" > "$WORK/ports.env"
+    # Validate before sourcing untrusted or malformed file content;
+    # require decimal loopback ports, no arbitrary shell expressions.
+    if ! python3 "$REPO/scripts/validate-mcp-ports.py" "$WORK/ports.env"; then
+        echo "  FAIL: invalid MCP ports.env; refusing an insecure partial upgrade" >&2
+        return 1
+    fi
+    local have_ports=1
+    case "$ports_env_txt" in
+        *ML_AGORA_PORT=38*) echo "  note: legacy 38xxx image, rebuild explicitly to migrate" ;;
+    esac
+    ( set -a; . "$WORK/ports.env"; set +a
+      grep -oE '^ML_[A-Z_]+_PORT' "$WORK/ports.env" \
+          | while read -r v; do
+                printf 'PublishPort=127.0.0.1:%s:%s\n' "${!v}" "${!v}"
+            done ) > "$WORK/mcp-ports.publish"
     # Only packaged images support the audited supervisor. Never copy
     # legacy supervisor code from lab-writable workspace into a trusted
     # executable path: an agent may already have changed it.
