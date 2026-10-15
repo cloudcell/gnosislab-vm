@@ -573,6 +573,56 @@ ensure_vm() {
         return 1
     }
 
+    # Recover the original experiment-zone ACLs before Podman statfs()
+    # validates its bind mounts. Sealed clones may retain data and images
+    # while /srv/lab loses exp's search permission. Never chmod /srv/lab
+    # for everyone or grant exp any rights on the protected mcp-state.
+    note "verifying exp bind-mount traversal and ACLs"
+    qga_exec "$vm" '
+        set -eu
+        fail() { echo "exp mount preflight: $*" >&2; exit 1; }
+        command -v setfacl >/dev/null 2>&1 ||
+            fail "setfacl unavailable"
+        for path in /srv /srv/lab /srv/lab/workspace /srv/lab/incoming \
+                    /srv/lab/exchange /srv/lab/experiments; do
+            test -d "$path" && test ! -L "$path" ||
+                fail "missing or symlinked directory: $path"
+        done
+        su - exp -c "test -x /srv" ||
+            fail "exp cannot traverse /srv"
+        if ! su - exp -c "test -x /srv/lab"; then
+            setfacl -m u:exp:--x /srv/lab ||
+                fail "cannot grant exp traverse-only access to /srv/lab"
+        fi
+        # Workspace and incoming data are read-only in the Quadlet;
+        # keep the guest-side ACLs read/execute only, never write.
+        setfacl -m u:exp:r-x /srv/lab/workspace ||
+            fail "cannot restore exp read-only workspace ACL"
+        setfacl -m u:exp:r-x /srv/lab/incoming ||
+            fail "cannot restore exp read-only incoming ACL"
+        # Writable experimental data is owned by exp, as in the template.
+        # Do not recurse into contents; preserve existing research files.
+        for path in /srv/lab/exchange /srv/lab/experiments; do
+            chown exp:exp "$path" ||
+                fail "cannot restore exp-owned directory: $path"
+            chmod u+rwx "$path" ||
+                fail "cannot restore exp directory permissions: $path"
+        done
+        setfacl -m u:lab:rwx /srv/lab/exchange ||
+            fail "cannot restore lab artifact-handoff ACL"
+        for path in /srv/lab/workspace /srv/lab/incoming \
+                    /srv/lab/exchange /srv/lab/experiments; do
+            su - exp -c "test -r \"$path\" && test -x \"$path\"" ||
+                fail "exp cannot read/traverse mount: $path"
+        done
+        for path in /srv/lab/exchange /srv/lab/experiments; do
+            su - exp -c "test -w \"$path\"" ||
+                fail "exp cannot write experiment mount: $path"
+        done
+        su - exp -c "test ! -r /srv/lab/mcp-state/ingest.env" ||
+            fail "security boundary violation: exp can read MCP token"
+    ' || { echo "  FAIL: experiment bind-mount preflight" >&2; return 1; }
+
     # quadlet: update definition; restart lab-cnt-exp only if it changed
     local changed exp_quadlet_failed=0
     changed=$(qga_exec "$vm" "
