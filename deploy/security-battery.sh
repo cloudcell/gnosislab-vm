@@ -231,18 +231,17 @@ for spec in \
     fi
 done
 
-# A private mcp home may prevent the lab user from reading the unit.
+# The dedicated mcp account's Quadlet is intentionally inaccessible to
+# the lab driver. Do not mistake correct confinement for an audit warning.
+# Its CONTENT is verified as root during initial provisioning and ensure;
+# this unprivileged battery checks only non-disclosure.
 MCP_UNIT=/home/mcp/.config/containers/systemd/lab-cnt-mcp.container
 if [ -r "$MCP_UNIT" ]; then
-    if grep -Fxq 'SeccompProfile=/etc/labloop/seccomp-labloop.json' "$MCP_UNIT" \
-       && grep -Fxq 'Volume=/usr/local/libexec/labloop-mcp-entrypoint:/usr/local/bin/labloop-mcp:ro' "$MCP_UNIT" \
-       && ! grep -Eq '^(SeccompProfile|Volume)=/srv/lab/workspace/.*(seccomp|entrypoint)' "$MCP_UNIT"; then
-        ok trusted-quadlet-mount "trusted runtime mounts use root-owned paths"
-    else
-        bad trusted-quadlet-mount "mcp quadlet has unsafe trusted runtime paths"
-    fi
+    bad trusted-quadlet-private "lab can read the dedicated MCP service definition"
+elif pgrep -u mcp -f 'labloop-mcp' >/dev/null 2>&1; then
+    ok trusted-quadlet-private "MCP service active; Quadlet inaccessible to lab (expected)"
 else
-    note trusted-quadlet-mount "mcp quadlet unreadable as lab; inspect as root"
+    bad trusted-quadlet-private "Quadlet inaccessible and MCP service not observed"
 fi
 # --- host-side zone separation -----------------------------------------
 # deterministic permission checks (no exp shell needed): verify the
