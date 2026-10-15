@@ -8,7 +8,10 @@
 # runs it in-process.
 if [ -n "${DISPLAY:-}" ] && [ ! -t 0 ] && [ -z "${_LABREADY_TTY:-}" ]; then
     export _LABREADY_TTY=1
-    exec x-terminal-emulator -e bash "$0" "$@"
+    if command -v x-terminal-emulator >/dev/null 2>&1; then
+        exec x-terminal-emulator -e bash "$0" "$@"
+    fi
+    echo "WARN: terminal launcher unavailable; running readiness checks without GUI" >&2
 fi
 
 set -u
