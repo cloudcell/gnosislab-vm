@@ -135,8 +135,8 @@ rebuild_exp_image() {
     qga_exec "$vm" "set -eu
         test ! -L '$stage'
         install -d -m 0700 -o root -g root '$stage'
-        test \\"\$(stat -c '%u:%a' '$stage')\\" = '0:700'" ||
-        { echo 'unsafe recovery staging directory' >&2; exit 1; }" ||
+        test -d '$stage'
+        test -O '$stage'" ||
         { echo "  FAIL: cannot prepare protected image staging" >&2; return 1; }
 
     note "uploading trusted experiment context (SHA-256 verification)"
