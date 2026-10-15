@@ -60,12 +60,12 @@ the trusted zone. That drives every choice below:
 # path mode — as lab, no sudo. Paths must live under /srv/lab/exchange.
 labloop-export /srv/lab/exchange/results.tar.gz /srv/lab/exchange/fig1.pdf
 
-# full mode — operator-grade snapshot. Root, hardcoded read set,
-# quiesces lab-cnt-mcp + lab-cnt-exp briefly, 300s rate limit.
-sudo labloop-export --all
+# full mode — run ON THE HOST (operator only). The guest exporter
+# runs as root through QEMU guest agent; lab has no passwordless root grant.
+./90-extract-lab-data.sh --all lab-vm-rc-26 ./extracted
 ```
 
-Both write `manifest.json` + `export.tar.gz` into their staging dir.
+The path-mode guest command stages `manifest.json` and `export.tar.gz` for host retrieval. Host `--all` invokes the root guest exporter via QEMU guest agent and retrieves its staged archive. It briefly quiesces the research containers and requires host operator access.
 `--all` covers `/srv/lab/{exchange,experiments,mcp-state}`, podman
 volumes, journald + logs, workspace, `~/Desktop`, and agent state —
 lab work, not the OS image.

@@ -35,12 +35,11 @@ lab ALL=(exp) NOPASSWD: /usr/local/sbin/labloop-build
 # Both forms listed so a bare `labloop-fault` (usage) also resolves.
 lab ALL=(mcp) NOPASSWD: /usr/local/sbin/labloop-fault, /usr/local/sbin/labloop-fault *
 
-# labloop-export --all (deploy/labloop-export): the full lab-work export.
-# Arg-pinned to exactly `--all` — no additional arguments match, so the
-# root read set (hardcoded inside the script) can never be steered to
-# /etc/shadow or anywhere else. Path mode needs no rule: it runs AS lab
-# and is confined to /srv/lab/exchange by the script's realpath gate.
-lab ALL=(root) NOPASSWD: /usr/local/sbin/labloop-export --all
+# A full export includes privileged MCP and agent state and stops/restarts
+# research containers. Only an operator should initiate it via the host
+# 90-extract-lab-data.sh --all (QEMU guest agent invokes the root exporter).
+# Do NOT give the driver/agent passwordless root access to this operation.
+# The path-scoped export runs as lab without sudo under /srv/lab/exchange.
 
 # OpenCode V2 uses a lab-owned executable and updates through
 # 'opencode upgrade' as lab. There is deliberately no root sudo grant

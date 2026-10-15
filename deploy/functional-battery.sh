@@ -119,13 +119,12 @@ fi
 
 # --- export channel: path-mode round trip ----------------------------------
 # real export of a known file through labloop-export, then verify the
-# staged manifest + tarball integrity. (--all is NOT run here — it
-# quiesces both containers; its wiring is checked via sudoers only.)
-if [ -x /usr/local/sbin/labloop-export ] \
-   && sudo -n -l 2>/dev/null | grep -q 'labloop-export --all'; then
-    ok export-channel "labloop-export installed + --all in lab's sudoers"
+# staged manifest + tarball integrity. Full export is an operator-only
+# root operation over the QEMU agent; no sudo grant for lab is expected.
+if [ -x /usr/local/sbin/labloop-export ]; then
+    ok export-channel "path exporter installed; host-QGA owns full export"
 else
-    bad export-channel "labloop-export missing — no data-extraction path"
+    bad export-channel "labloop-export missing"
 fi
 
 # Self-test is deliberately isolated: it must never overwrite a real
