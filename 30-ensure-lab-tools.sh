@@ -31,8 +31,10 @@ die()  { echo "30-ensure: $*" >&2; exit 1; }
 note() { echo "  ==> $*"; }
 
 REBUILD_IMAGE=0
+REBUILD_EXP=0
 for a in "$@"; do
     [ "$a" = "--rebuild-mcp-image" ] && REBUILD_IMAGE=1
+    [ "$a" = "--rebuild-exp-image" ] && REBUILD_EXP=1
 done
 TARGET=${1:?"usage: ./30-ensure-lab-tools.sh <vm>|all [--rebuild-mcp-image]"}
 id -nG | grep -qw libvirt || exec sg libvirt -c "$0 $*"
@@ -161,6 +163,25 @@ rebuild_mcp_image() {
     echo "  trusted image rebuilt; deferring restart until protected assets are installed"
 }
 
+rebuild_exp_image() {
+    local vm=$1
+    note "rebuilding experiment image from trusted host checkout (may take minutes)"
+    mkdir -p "$WORK/experiment"
+    cp "$REPO/containers/experiment/Containerfile" "$REPO/containers/experiment/pip" "$WORK/experiment/"
+    tar -C "$WORK/experiment" -cf "$WORK/experiment.tar" .
+    qga_push "$vm" "$WORK/experiment.tar" /tmp/gnosislab-exp-build.tar || return 1
+    qga_exec "$vm" '
+        set -eu
+        test ! -L /home/exp/build
+        install -d -m 0755 -o exp -g exp /home/exp/build/experiment
+        tar -xf /tmp/gnosislab-exp-build.tar -C /home/exp/build/experiment
+        rm -f /tmp/gnosislab-exp-build.tar
+        chown -R exp:exp /home/exp/build
+        su - exp -c "podman build -t lab-img-exp -f /home/exp/build/experiment/Containerfile /home/exp/build/experiment"
+        su - exp -c "podman image exists lab-img-exp"
+        rm -rf /home/exp/build/experiment'
+}
+
 ensure_vm() {
     local vm=$1
     echo; echo "### $vm"
@@ -205,6 +226,16 @@ ensure_vm() {
     # pushes the package-era entrypoint.
     if [ "$REBUILD_IMAGE" = 1 ]; then
         rebuild_mcp_image "$vm" || { echo "  FAIL: trusted image rebuild failed"; return 1; }
+    fi
+
+    if [ "$REBUILD_EXP" = 1 ]; then
+        rebuild_exp_image "$vm" ||
+            { echo "  FAIL: experiment image rebuild failed" >&2; return 1; }
+    fi
+    if ! qga_exec "$vm" "su - exp -c 'podman image exists lab-img-exp'" >/dev/null 2>&1; then
+        echo "  FAIL: exp image lab-img-exp missing" >&2
+        echo "  Restore explicitly: ./30-ensure-lab-tools.sh $vm --rebuild-exp-image" >&2
+        return 1
     fi
 
     # Restore desktop files before any MCP image checks. This is also
@@ -583,6 +614,32 @@ ensure_vm() {
                 /home/mcp/.config/containers/systemd/lab-cnt-mcp.container" \
             || { echo "  FAIL: mcp quadlet install"; return 1; }
     fi
+    # Restore the token-file access required by the mcp-owned Quadlet.
+    # Do not regenerate a valid existing token. A missing file receives
+    # a fresh random value; never display or copy the token to the lab user.
+    note "verifying mcp ingest token ownership"
+    qga_exec "$vm" '
+        set -eu
+        path=/srv/lab/mcp-state
+        file="$path/ingest.env"
+        test ! -L "$path" && test -d "$path"
+        test ! -L "$file"
+        chown mcp:mcp "$path"
+        chmod 0700 "$path"
+        if test -e "$file"; then
+            test -f "$file" || exit 1
+            chown mcp:mcp "$file"
+            chmod 0600 "$file"
+        else
+            umask 077
+            token="$(head -c 32 /dev/urandom | base64 -w0)"
+            printf "ML_EPISTEME_INGEST_TOKEN=%s\n" "$token" > "$file"
+            chown mcp:mcp "$file"
+            chmod 0600 "$file"
+        fi
+        su - mcp -c "test -r /srv/lab/mcp-state/ingest.env"
+    ' || { echo "  FAIL: trusted MCP token permissions" >&2; return 1; }
+
     note "restarting trusted container on protected runtime configuration"
     qga_exec "$vm" "su - mcp -c 'XDG_RUNTIME_DIR=/run/user/\$(id -u) \
         systemctl --user daemon-reload && systemctl --user restart lab-cnt-mcp'" \
