@@ -14,8 +14,31 @@ case "$vm" in *[!a-z0-9-]*|lab-vm-)
 [ -f "$DRIVER" ] || { echo "missing $DRIVER" >&2; exit 1; }
 qga() { python3 "$DRIVER" "$vm" exec "$@"; }
 push() { python3 "$DRIVER" "$vm" push "$1" "$2"; }
-python3 "$DRIVER" "$vm" ping >/dev/null ||
-    { echo "guest agent unavailable: $vm" >&2; exit 1; }
+# The agent cannot answer if this *system* libvirt domain does not exist.
+# Distinguish missing/renamed domains and powered-off guests from QGA errors.
+VIRSH=(virsh -c qemu:///system)
+if ! "${VIRSH[@]}" list --all --name >/dev/null; then
+    echo "cannot connect to libvirt qemu:///system (check host and permissions)" >&2
+    exit 1
+fi
+if ! "${VIRSH[@]}" dominfo "$vm" >/dev/null 2>&1; then
+    echo "VM '$vm' is not defined in qemu:///system on this host." >&2
+    echo "Check: virsh -c qemu:///system list --all" >&2
+    echo "Also check: virsh -c qemu:///session list --all" >&2
+    echo "If its qcow2 still exists, preserve it; do not rerun clone or delete it." >&2
+    exit 1
+fi
+state=$("${VIRSH[@]}" domstate "$vm")
+if [ "$state" != "running" ]; then
+    echo "VM '$vm' is $state; start it first:" >&2
+    echo "  virsh -c qemu:///system start $vm" >&2
+    exit 1
+fi
+if ! python3 "$DRIVER" "$vm" ping; then
+    echo "VM '$vm' is running, but QEMU guest agent is unavailable." >&2
+    echo "Check the guest's qemu-guest-agent service and virtio channel." >&2
+    exit 1
+fi
 
 qga 'install -d -m 0755 -o lab -g lab /home/lab/Desktop \
     /home/lab/.local/share/icons /home/lab/.local/share/applications \
