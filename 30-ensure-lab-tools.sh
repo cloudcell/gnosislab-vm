@@ -407,10 +407,12 @@ ensure_vm() {
         test -L /home/lab/workspace/SECURITY-MANUAL.md &&
         cmp -s /tmp/ensure-check-lab-ready.sh \
                /home/lab/Desktop/check-lab-ready.sh &&
-        cmp -s /tmp/ensure-opencode.json \
-               /home/lab/.config/opencode/opencode.json &&
-        cmp -s /tmp/ensure-opencode.jsonc \
-               /home/lab/.config/opencode/opencode.jsonc &&
+        test -x /home/lab/.opencode/bin/opencode &&
+        cmp -s /tmp/ensure-opencode-launcher /usr/local/bin/opencode &&
+        cmp -s /tmp/ensure-opencode-update-command.md \
+            /home/lab/.config/opencode/commands/update.md &&
+        test -f /home/lab/.config/opencode/opencode.json &&
+        test -f /home/lab/.config/opencode/opencode.jsonc &&
         cmp -s /tmp/ensure-lab-cnt-exp.container \
                /home/exp/.config/containers/systemd/lab-cnt-exp.container &&
         $quadlet_cmp &&
@@ -513,12 +515,25 @@ ensure_vm() {
         install -d -m 0755 -o lab -g lab /home/lab/Desktop &&
         install -m 0755 -o lab -g lab /tmp/ensure-check-lab-ready.sh \
             /home/lab/Desktop/check-lab-ready.sh &&
-        install -d -m 0755 -o lab -g lab /home/lab/.config/opencode &&
-        install -m 0644 -o lab -g lab /tmp/ensure-opencode.json \
-            /home/lab/.config/opencode/opencode.json &&
-        { test -e /home/lab/.config/opencode/opencode.jsonc || \
+        install -d -m 0755 -o lab -g lab /home/lab/.config/opencode \
+            /home/lab/.config/opencode/commands /home/lab/.opencode \
+            /home/lab/.opencode/bin &&
+        { test -e /home/lab/.config/opencode/opencode.json ||
+          install -m 0644 -o lab -g lab /tmp/ensure-opencode.json \
+                /home/lab/.config/opencode/opencode.json; } &&
+        { test -e /home/lab/.config/opencode/opencode.jsonc ||
           install -m 0644 -o lab -g lab /tmp/ensure-opencode.jsonc \
                 /home/lab/.config/opencode/opencode.jsonc; } &&
+        { test -x /home/lab/.opencode/bin/opencode ||
+          install -m 0755 -o lab -g lab /usr/local/bin/opencode \
+                /home/lab/.opencode/bin/opencode; } &&
+        install -m 0755 -o root -g root /tmp/ensure-opencode-launcher \
+            /usr/local/bin/opencode &&
+        install -m 0644 -o lab -g lab /tmp/ensure-opencode-update-command.md \
+            /home/lab/.config/opencode/commands/update.md &&
+        install -m 0755 -o lab -g lab /tmp/ensure-opencode-v2-migrate.py \
+            /home/lab/.config/opencode/opencode-v2-migrate.py &&
+        su - lab -c 'python3 /home/lab/.config/opencode/opencode-v2-migrate.py' &&
         install -m 0755 -o lab -g lab /tmp/ensure-configure-host-models.py \
             /home/lab/Desktop/configure-host-models.py &&
         install -m 0440 -o lab -g lab /tmp/ensure-labloop.sudoers \
