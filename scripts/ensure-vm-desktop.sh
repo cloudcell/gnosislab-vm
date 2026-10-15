@@ -18,7 +18,8 @@ python3 "$DRIVER" "$vm" ping >/dev/null ||
     { echo "guest agent unavailable: $vm" >&2; exit 1; }
 
 qga 'install -d -m 0755 -o lab -g lab /home/lab/Desktop \
-    /home/lab/.local/share/icons /home/lab/.local/share/applications'
+    /home/lab/.local/share/icons /home/lab/.local/share/applications \
+    /home/lab/Desktop/diagnostics /home/lab/Desktop/optional-patches'
 
 # Host files, not /srv/lab/workspace (agent-writable).
 push "$REPO/deploy/check-lab-ready.sh" /home/lab/Desktop/check-lab-ready.sh
@@ -27,6 +28,35 @@ push "$REPO/deploy/Desktop-README.md" /home/lab/Desktop/README.md
 push "$REPO/deploy/opencode.desktop" /home/lab/Desktop/opencode.desktop
 push "$REPO/deploy/opencode.desktop" /home/lab/.local/share/applications/opencode.desktop
 push "$REPO/assets/opencode-wordmark-dark.png" /home/lab/.local/share/icons/opencode.png
+# Always ship useful diagnostic scripts and an opt-in local model setup.
+for f in security-battery.sh functional-battery.sh; do
+    push "$REPO/deploy/$f" "/home/lab/Desktop/diagnostics/$f"
+done
+push "$REPO/deploy/diagnostics-README.md" /home/lab/Desktop/diagnostics/README.md
+push "$REPO/deploy/configure-host-models.py" /home/lab/Desktop/optional-patches/configure-host-models.py
+push "$REPO/deploy/optional-patches-README.md" /home/lab/Desktop/optional-patches/README.md
+
+# Additional cached reports (when present) and operator-provided
+# private patches are additive. Never infer model IDs or execute patches.
+CACHE="${XDG_CACHE_HOME:-$HOME/.cache}/labloop/pkgs/gnosislab/diagnostics"
+if [ -d "$CACHE" ]; then
+    for file in "$CACHE"/*; do
+        [ -f "$file" ] || continue
+        name="$(basename "$file")"
+        case "$name" in *[!a-zA-Z0-9._-]* ) continue ;; esac
+        push "$file" "/home/lab/Desktop/diagnostics/$name"
+    done
+fi
+if [ -n "${LABLOOP_PATCHES_DIR:-}" ]; then
+    [ -d "$LABLOOP_PATCHES_DIR" ] || { echo "patch directory not found" >&2; exit 1; }
+    for file in "$LABLOOP_PATCHES_DIR"/*; do
+        [ -f "$file" ] || continue
+        name="$(basename "$file")"
+        case "$name" in *[!a-zA-Z0-9._-]* ) continue ;; esac
+        push "$file" "/home/lab/Desktop/optional-patches/$name"
+    done
+fi
+
 # Install root-owned executable directly, without a lab-writable /tmp stage.
 push "$REPO/deploy/opencode-lab" /usr/local/bin/opencode-lab
 qga 'set -eu
@@ -48,4 +78,9 @@ qga 'set -eu
     test -s /home/lab/Desktop/README.md
     test -x /home/lab/Desktop/check-lab-ready.sh
     test -x /usr/local/bin/opencode-lab'
+qga 'chown -R lab:lab /home/lab/Desktop/diagnostics /home/lab/Desktop/optional-patches &&
+    find /home/lab/Desktop/diagnostics /home/lab/Desktop/optional-patches -type f -name "*.sh" -exec chmod 0755 {} + &&
+    chmod 0755 /home/lab/Desktop/optional-patches/configure-host-models.py &&
+    test -s /home/lab/Desktop/diagnostics/README.md &&
+    test -s /home/lab/Desktop/optional-patches/README.md'
 echo "  desktop restored for $vm (Dashboard, OpenCode, README, readiness check)"
