@@ -337,7 +337,7 @@ rm -f /srv/lab/exchange/.esc-link
 if sudo -n $EXP_SBIN --all /etc/shadow >/dev/null 2>&1; then
     bad export-arg-pin "sudo accepted --all + extra arg — arg-pin broken"
 else
-    ok export-arg-pin "sudoers arg-pin rejects extra args to --all"
+    ok export-arg-pin "sudo refuses full export with extra arguments"
 fi
 
 if $EXP_SBIN /srv/lab/mcp-state >/dev/null 2>&1; then
