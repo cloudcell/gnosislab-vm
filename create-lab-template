@@ -829,12 +829,14 @@ else
 fi
 qga_push "$REPO/deploy/opencode.json" /tmp/opencode.json
 qga_push "$REPO/deploy/opencode.jsonc" /tmp/opencode.jsonc
+qga_push "$REPO/deploy/configure-host-models.py" /tmp/configure-host-models.py
 qga "install -d -m 0755 -o lab -g lab /home/lab/.config/opencode && \
      install -m 0644 -o lab -g lab /tmp/opencode.json \
          /home/lab/.config/opencode/opencode.json && \
      install -m 0644 -o lab -g lab /tmp/opencode.jsonc \
          /home/lab/.config/opencode/opencode.jsonc && \
      rm -f /tmp/opencode.json /tmp/opencode.jsonc && \
+     install -m 0755 -o lab -g lab /tmp/configure-host-models.py /home/lab/Desktop/configure-host-models.py && \
      chown -R lab:lab /home/lab/.config"
 
 note "guest hostname = domain name (sa-02); timezone UTC"

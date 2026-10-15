@@ -71,10 +71,15 @@ else
     bad opencode-config "$OC missing or no MCP servers"
 fi
 OCC=~/.config/opencode/opencode.jsonc
-if [ -f "$OCC" ] && grep -q '192\.168\.122\.1:8002' "$OCC"; then
-    ok opencode-vllm "vLLM host provider wired in opencode.jsonc"
+if [ -f "$OCC" ] && grep -Eq '"host-local"|"vllm"' "$OCC"; then
+    ok opencode-local "host-local model provider configured"
 else
-    bad opencode-vllm "$OCC missing or no vLLM baseURL"
+    warn opencode-local "configure with ~/Desktop/configure-host-models.py"
+fi
+if curl --max-time 3 -fsS http://192.168.122.1:8002/v1/models >/dev/null 2>&1; then
+    ok host-llm "host LLM reachable on default endpoint"
+else
+    warn host-llm "default host endpoint unavailable (may use custom endpoint)"
 fi
 # opencode shadow/drift — WARN only. The npm pin lives at
 # /usr/local/bin/opencode (root-owned); a self-update instead drops a
