@@ -128,22 +128,16 @@ else
     bad export-channel "labloop-export missing — no data-extraction path"
 fi
 
-echo "roundtrip-$RANDOM" > /srv/lab/exchange/.exp-probe 2>/dev/null
-if labloop-export /srv/lab/exchange/.exp-probe >/dev/null 2>&1 \
-   && python3 - <<'PY' 2>/dev/null
-import hashlib, json
-m = json.load(open("/var/lib/labloop-export/user/manifest.json"))
-want = hashlib.sha256(open("/srv/lab/exchange/.exp-probe","rb").read()).hexdigest()
-hit = [f for f in m["files"] if f["sha256"] == want]
-assert hit and m["tarball"]["name"] == "export.tar.gz"
-import os; assert os.path.exists("/var/lib/labloop-export/user/export.tar.gz")
-PY
-then
-    ok export-roundtrip "staged manifest+tarball, sha256 verified"
+# Self-test is deliberately isolated: it must never overwrite a real
+# /var/lib/labloop-export/user/{manifest.json,export.tar.gz} snapshot.
+probe=/srv/lab/exchange/.exp-probe
+printf 'roundtrip-%s\\n' "$RANDOM" > "$probe" 2>/dev/null || true
+if [ -f "$probe" ] && labloop-export --self-test "$probe" >/dev/null 2>&1; then
+    ok export-roundtrip "isolated tar/manifest round trip; user export preserved"
 else
-    bad export-roundtrip "path-mode export or manifest check failed"
+    bad export-roundtrip "isolated export or manifest verification failed"
 fi
-rm -f /srv/lab/exchange/.exp-probe
+rm -f -- "$probe"
 
 # --- driver-side: agent tooling -----------------------------------------------
 for t in opencode uv codium git mc; do
