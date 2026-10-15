@@ -19,7 +19,12 @@ class ContainerRecovery(unittest.TestCase):
         self.assertLess(UPGRADE.index('note "verifying mcp ingest token ownership"'),
                         UPGRADE.index('note "restarting trusted container on protected runtime configuration"'))
     def test_health_port_expansion_is_deferred_to_container(self):
-        self.assertIn('$' + '${ML_EPISTEME_PORT}', MCP)
+        self.assertIn('
+        self.assertNotIn('127.0.0.1:${ML_EPISTEME_PORT}/health', MCP)
+
+if __name__ == "__main__":
+    unittest.main()
+ * 2 + '{ML_EPISTEME_PORT}', MCP)
         self.assertNotIn('127.0.0.1:${ML_EPISTEME_PORT}/health', MCP)
 
 if __name__ == "__main__":
