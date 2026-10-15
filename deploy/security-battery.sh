@@ -307,6 +307,14 @@ else
 fi
 
 # --- extraction channel (labloop-export) --------------------------------
+# A compromised driver MUST NOT be able to trigger an operator-grade
+# full export: that operation is reserved for host QGA, not sudo NOPASSWD.
+# Read sudo policy without executing --all (which quiesces containers).
+if sudo -n -l 2>/dev/null | grep -Eq 'NOPASSWD:.*(/usr/local/sbin/labloop-export[[:space:]]+--all|ALL)'; then
+    bad export-operator-only "driver holds a passwordless root full-export grant"
+else
+    ok export-operator-only "full export requires host operator; no driver NOPASSWD grant"
+fi
 # fail-closed probes for the pull-only export — every call below is
 # EXPECTED TO BE REFUSED. Staging dirs are provisioned by tmpfiles
 # (0700 per-owner): verify hostile can't poison them either.
