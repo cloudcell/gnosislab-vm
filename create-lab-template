@@ -959,8 +959,8 @@ qga "test ! -L /home/lab/Desktop && \
      install -m 0644 -o lab -g lab /tmp/opencode.jsonc \
          /home/lab/.config/opencode/opencode.jsonc && \
      rm -f /tmp/opencode.json /tmp/opencode.jsonc /tmp/opencode-update-command.md /tmp/opencode-launcher && \
-     install -m 0755 -o lab -g lab /tmp/configure-host-models.py /home/lab/Desktop/configure-host-models.py &&
      install -d -m 0755 -o lab -g lab /home/lab/Desktop/optional-patches && \
+     install -m 0755 -o lab -g lab /tmp/configure-host-models.py /home/lab/Desktop/optional-patches/configure-host-models.py && \
      install -m 0755 -o lab -g lab /tmp/probe-opencode-reasoning.py /home/lab/Desktop/optional-patches/probe-opencode-reasoning.py && \
      chown -R lab:lab /home/lab/.config"
 
