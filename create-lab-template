@@ -947,6 +947,7 @@ fi
 qga_push "$REPO/deploy/opencode.json" /tmp/opencode.json
 qga_push "$REPO/deploy/opencode.jsonc" /tmp/opencode.jsonc
 qga_push "$REPO/deploy/configure-host-models.py" /tmp/configure-host-models.py
+qga_push "$REPO/deploy/probe-opencode-reasoning.py" /tmp/probe-opencode-reasoning.py
 qga_push "$REPO/deploy/opencode-update-command.md" /tmp/opencode-update-command.md
 qga_push "$REPO/deploy/opencode-launcher" /tmp/opencode-launcher
 qga "test ! -L /home/lab/Desktop && \
@@ -958,7 +959,9 @@ qga "test ! -L /home/lab/Desktop && \
      install -m 0644 -o lab -g lab /tmp/opencode.jsonc \
          /home/lab/.config/opencode/opencode.jsonc && \
      rm -f /tmp/opencode.json /tmp/opencode.jsonc /tmp/opencode-update-command.md /tmp/opencode-launcher && \
-     install -m 0755 -o lab -g lab /tmp/configure-host-models.py /home/lab/Desktop/configure-host-models.py && \
+     install -m 0755 -o lab -g lab /tmp/configure-host-models.py /home/lab/Desktop/configure-host-models.py &&
+     install -d -m 0755 -o lab -g lab /home/lab/Desktop/optional-patches && \
+     install -m 0755 -o lab -g lab /tmp/probe-opencode-reasoning.py /home/lab/Desktop/optional-patches/probe-opencode-reasoning.py && \
      chown -R lab:lab /home/lab/.config"
 
 note "guest hostname = domain name (sa-02); timezone UTC"
