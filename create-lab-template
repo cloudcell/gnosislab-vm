@@ -946,7 +946,9 @@ else
 fi
 qga_push "$REPO/deploy/opencode.json" /tmp/opencode.json
 qga_push "$REPO/deploy/opencode.jsonc" /tmp/opencode.jsonc
-qga_push "$REPO/deploy/configure-host-models.py" /tmp/configure-host-models.py\nqga_push "$REPO/deploy/opencode-update-command.md" /tmp/opencode-update-command.md\nqga_push "$REPO/deploy/opencode-launcher" /tmp/opencode-launcher
+qga_push "$REPO/deploy/configure-host-models.py" /tmp/configure-host-models.py
+qga_push "$REPO/deploy/opencode-update-command.md" /tmp/opencode-update-command.md
+qga_push "$REPO/deploy/opencode-launcher" /tmp/opencode-launcher
 qga "test ! -L /home/lab/Desktop && \
      install -d -m 0755 -o lab -g lab /home/lab/Desktop /home/lab/.config/opencode /home/lab/.config/opencode/commands && \
      install -m 0755 -o root -g root /tmp/opencode-launcher /usr/local/bin/opencode && \
