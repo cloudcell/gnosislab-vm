@@ -64,7 +64,6 @@ for f in security-battery.sh functional-battery.sh; do
 done
 push "$REPO/deploy/diagnostics-README.md" /home/lab/Desktop/diagnostics/README.md
 push "$REPO/deploy/configure-host-models.py" /home/lab/Desktop/optional-patches/configure-host-models.py
-push "$REPO/deploy/probe-opencode-reasoning.py" /home/lab/Desktop/optional-patches/probe-opencode-reasoning.py
 push "$REPO/deploy/optional-patches-README.md" /home/lab/Desktop/optional-patches/README.md
 # Retire the historical duplicate only if it is an unmodified managed copy.
 # Never remove a customized desktop script or follow a symlink.
@@ -137,7 +136,7 @@ qga 'set -eu
     test -d /home/lab/workspace/experiments'
 qga 'chown -R lab:lab /home/lab/Desktop/diagnostics /home/lab/Desktop/optional-patches &&
     find /home/lab/Desktop/diagnostics /home/lab/Desktop/optional-patches -type f -name "*.sh" -exec chmod 0755 {} + &&
-    chmod 0755 /home/lab/Desktop/optional-patches/configure-host-models.py /home/lab/Desktop/optional-patches/probe-opencode-reasoning.py &&
+    chmod 0755 /home/lab/Desktop/optional-patches/configure-host-models.py &&
     test -s /home/lab/Desktop/diagnostics/README.md &&
     test -s /home/lab/Desktop/optional-patches/README.md'
 # Trust only after QGA has finished writing all launchers and ownership.
