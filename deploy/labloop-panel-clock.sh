@@ -1,45 +1,43 @@
 #!/usr/bin/env bash
-# Keep the XFCE panel clock in UTC with the explicit timezone suffix.
-# Runs at each graphical login via /etc/xdg/autostart; no one-shot stamp.
-# Older clones can run it again in the active lab GUI session.
+# Reinstate the explicit UTC label in XFCE's panel clock each login.
+# Never mark complete when no session/plugin is available.
 set -euo pipefail
-
-export DBUS_SESSION_BUS_ADDRESS="${DBUS_SESSION_BUS_ADDRESS:-unix:path=/run/user/$(id -u)/bus}"
 export DISPLAY="${DISPLAY:-:0}"
+export DBUS_SESSION_BUS_ADDRESS="${DBUS_SESSION_BUS_ADDRESS:-unix:path=/run/user/$(id -u)/bus}"
 
-# The panel plugin id is assigned dynamically. Wait for xfconfd and
-# plugin registration, not an arbitrary fixed panel instance number.
-clock_plugin=""
+# Look up the clock plugin by exact module name, not a guessed ID.
+plugin=""
+kind=""
 for _ in $(seq 30); do
-    clock_plugin="$(xfconf-query -c xfce4-panel -lv 2>/dev/null | awk '
-        $1 ~ /^\/plugins\/plugin-[0-9]+$/ && $2 == "clock" || $2 == "datetime" {
-            sub(".*/", "", $1); print $1; exit
-        }')"
-    [ -n "$clock_plugin" ] && break
+    record="$(xfconf-query -c xfce4-panel -lv 2>/dev/null |
+        awk '$1 ~ /^\/plugins\/plugin-[0-9]+$/ && ($2 == "clock" || $2 == "datetime") {
+            print $1 " " $2; exit
+        }' || true)"
+    if [ -n "$record" ]; then
+        plugin="${record%% *}"
+        kind="${record#* }"
+        break
+    fi
     sleep 1
 done
-if [ -z "$clock_plugin" ]; then
-    echo "labloop-panel-clock: no XFCE clock plugin found; retry at next login" >&2
+if [ -z "$plugin" ]; then
+    echo "UTC clock: no XFCE clock/datetime plugin is registered" >&2
     exit 1
 fi
 
-# Write live xfconf state, with an explicit UTC label. XFCE plugin builds
-# vary: classic clock uses digital-time-format; datetime uses time-format.
-# Setting both is harmless and supports both plugin variants.
-# Use the plugin-local timezone rather than relying on the host's TZ.
-# Create new properties, or update existing ones, then verify both.
-for setting in "timezone=UTC" "digital-time-format=%H:%M UTC" "time-format=%H:%M UTC"; do
-    property="/plugins/$clock_plugin/${setting%%=*}"
-    value="${setting#*=}"
-    current="$(xfconf-query -c xfce4-panel -p "$property" 2>/dev/null || true)"
-    [ "$current" = "$value" ] && continue
+set_property() {
+    local key="$1" value="$2" property="$plugin/$key"
     if ! xfconf-query -c xfce4-panel -p "$property" -s "$value" 2>/dev/null; then
         xfconf-query -c xfce4-panel -p "$property" --create -t string -s "$value"
     fi
-    actual="$(xfconf-query -c xfce4-panel -p "$property" 2>/dev/null || true)"
-    if [ "$actual" != "$value" ]; then
-        echo "labloop-panel-clock: could not apply $property" >&2
-        exit 1
-    fi
-done
-# xfconf changes notify the running panel, no disruptive forced restart.
+    test "$(xfconf-query -c xfce4-panel -p "$property")" = "$value"
+}
+set_property timezone UTC
+# XFCE classic digital clock reads digital-time-format; datetime reads
+# time-format. A literal UTC suffix is deliberate, not host-local %Z.
+if [ "$kind" = datetime ]; then
+    set_property time-format '%H:%M UTC'
+else
+    set_property digital-time-format '%H:%M UTC'
+fi
+echo "UTC clock: applied %H:%M UTC to $plugin ($kind)"

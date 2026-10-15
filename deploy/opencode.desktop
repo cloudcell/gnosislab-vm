@@ -1,10 +1,13 @@
 [Desktop Entry]
+Version=1.0
 Type=Application
-Name=opencode
-Comment=AI coding agent — labloop driver
-Exec=/usr/local/bin/opencode-lab
+Name=OpenCode
+Comment=AI coding agent in the GnosisLab driver workspace
+# Use the XFCE terminal explicitly. --hold exposes launch failures rather
+# than closing immediately when the CLI exits.
+Exec=xfce4-terminal --hold --title=OpenCode --execute /usr/local/bin/opencode-lab
 Icon=/home/lab/.local/share/icons/opencode.png
 Path=/home/lab/workspace
-Terminal=true
+Terminal=false
 Categories=Development;
 StartupNotify=false

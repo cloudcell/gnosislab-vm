@@ -90,12 +90,6 @@ push "$REPO/deploy/gnosislab-desktop-trust.desktop" /etc/xdg/autostart/gnosislab
 qga 'chown root:root /usr/local/share/gnosislab/desktop/*.desktop /usr/local/libexec/gnosislab-desktop-trust.sh /etc/xdg/autostart/gnosislab-desktop-trust.desktop &&
     chmod 0644 /usr/local/share/gnosislab/desktop/*.desktop /etc/xdg/autostart/gnosislab-desktop-trust.desktop &&
     chmod 0755 /usr/local/libexec/gnosislab-desktop-trust.sh'
-# If a real GUI session is active, trust now without logout. Otherwise the
-# system-wide XDG autostart hook runs in lab's next graphical session.
-qga 'if [ -S /run/user/$(id -u lab)/bus ]; then
-    su - lab -c "/usr/local/libexec/gnosislab-desktop-trust.sh" || true
-fi'
-
 # Install root-owned executable directly, without a lab-writable /tmp stage.
 push "$REPO/deploy/opencode-lab" /usr/local/bin/opencode-lab
 qga 'set -eu
@@ -122,4 +116,10 @@ qga 'chown -R lab:lab /home/lab/Desktop/diagnostics /home/lab/Desktop/optional-p
     chmod 0755 /home/lab/Desktop/optional-patches/configure-host-models.py &&
     test -s /home/lab/Desktop/diagnostics/README.md &&
     test -s /home/lab/Desktop/optional-patches/README.md'
+# Trust only after QGA has finished writing all launchers and ownership.
+# Never silently swallow a failure in the active GUI session.
+qga 'if [ -S /run/user/$(id -u lab)/bus ]; then
+    su - lab -c "/usr/local/libexec/gnosislab-desktop-trust.sh" ||
+        echo "WARN: launcher trust not established; run trust helper in lab graphical session" >&2
+fi'
 echo "  desktop restored for $vm (Dashboard, OpenCode, README, readiness check)"
