@@ -142,7 +142,7 @@ else
 fi
 
 # Propagate the requested video preference even to older golden templates.
-# The guest display hook will independently select the active XRandR mode.
+# SPICE/virtio negotiates the active mode without pre-greeter XRandR hooks.
 REPO="$(cd "$(dirname "$0")" && pwd)"
 [ -f "$REPO/labloop.conf" ] && . "$REPO/labloop.conf"
 RES_X="${LABLOOP_RES_X:-2560}"; RES_Y="${LABLOOP_RES_Y:-1440}"

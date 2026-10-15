@@ -1068,29 +1068,24 @@ qga "install -d -m 0755 /usr/local/libexec && \
      install -m 0644 /tmp/labloop-panel-clock.desktop /etc/xdg/autostart/ && \
      rm -f /tmp/labloop-panel-clock.*"
 
-note "display mode: ${RES_X}x${RES_Y} @ ${REFRESH} Hz (greeter + login autostart)"
-# the XML pins the EDID native mode; non-native rates (60, 59.94, 30…)
-# are injected by the login hook as a reduced-blanking modeline. Two
-# hooks run the same script: lightdm display-setup (root, before the
-# greeter — so the login screen is already at the right mode) and the
-# XDG autostart (repair path if a session profile re-applied the old
-# one). The --fb/--panning on the xrandr call is what keeps the pointer
-# from staying clamped to the pre-switch geometry.
+note "display preference: ${RES_X}x${RES_Y} (SPICE/virtio, no pre-greeter XRandR hook)"
+# The libvirt video model carries the preferred mode and spice-vdagent
+# negotiates the active geometry with the viewer. A pre-greeter LightDM
+# display-setup-script that calls xrandr --fb/--panning caused a fully
+# black rc-26 console; disabling the LightDM and XDG hooks restored it.
+# Never invoke custom mode-setting automatically before or after login.
+# The requested refresh is retained as metadata, not forced: available
+# refresh rates depend on the virtual GPU/monitor and SPICE viewer.
 printf 'RES_X=%s\nRES_Y=%s\nREFRESH=%s\n' "$RES_X" "$RES_Y" "$REFRESH" \
     > "$WORK/display.conf"
 qga_push "$WORK/display.conf" /tmp/labloop-display.conf
-qga_push "$REPO/deploy/labloop-display.sh" /tmp/labloop-display.sh
-qga_push "$REPO/deploy/labloop-display.desktop" /tmp/labloop-display.desktop
-qga_push "$REPO/deploy/labloop-display-lightdm.conf" \
-         /tmp/labloop-display-lightdm.conf
-qga "install -d -m 0755 /usr/local/libexec /etc/labloop \
-         /etc/lightdm/lightdm.conf.d && \
-     install -m 0644 /tmp/labloop-display.conf /etc/labloop/display.conf && \
-     install -m 0755 /tmp/labloop-display.sh /usr/local/libexec/ && \
-     install -m 0644 /tmp/labloop-display.desktop /etc/xdg/autostart/ && \
-     install -m 0644 /tmp/labloop-display-lightdm.conf \
-         /etc/lightdm/lightdm.conf.d/50-labloop-display.conf && \
-     rm -f /tmp/labloop-display.*"
+qga "install -d -m 0755 /etc/labloop && \
+     install -m 0644 -o root -g root /tmp/labloop-display.conf \
+         /etc/labloop/display.conf && \
+     rm -f /tmp/labloop-display.conf \
+         /etc/lightdm/lightdm.conf.d/50-labloop-display.conf \
+         /etc/xdg/autostart/labloop-display.desktop \
+         /usr/local/libexec/labloop-display.sh"
 # best-effort immediate patch too — covers the case where lab's panel
 # config already exists (template re-provision after a session)
 qga "python3 - <<'EOF'
