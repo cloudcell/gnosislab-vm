@@ -510,7 +510,7 @@ for l in ${ONLY:-${LAYERS[*]}}; do
     s=$(status_line "$l")
     case "$s" in
         ok) ;;
-        stale) say "WARN: $l stale but kept (offline — nothing better exists)" ;;
+        stale) say "NOTE: $l verified, but cache age exceeds freshness target (use --refresh to update)" ;;
         *) die "layer '$l' still incomplete after prefetch" ;;
     esac
 done
