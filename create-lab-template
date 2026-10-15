@@ -634,15 +634,34 @@ note "trial interpreter env: /srv/lab/trial-env -> /opt/trial-env (volume; survi
 # exists, so an unpopulated dir degrades to the slim interpreter.
 # wheels from the cache when available: the bundle is resolved inside
 # python:3.12-slim at prefetch time so the tags match this interpreter.
+# Resume without clearing an environment installed on a previous run.
+# Validate from inside the trusted image, because venv Python symlinks
+# resolve to container paths, not paths on the VM host.
+trial_env_ready() {
+    qga "su - mcp -c 'podman run --rm --pull=never --network=none \
+        -e HOME=/tmp --entrypoint /opt/trial-env/bin/python \
+        -v /srv/lab/trial-env:/opt/trial-env:ro lab-img-mcp \
+        -c \"import numpy, pandas, scipy, sklearn, matplotlib, reportlab\"'" \
+        >/dev/null 2>&1
+}
+if trial_env_ready; then
+    echo "    existing scientific trial-env verified; reuse without modification"
+else
+    # An incomplete venv already has pyvenv.cfg. Install missing wheels
+    # into it rather than recreating it (uv refuses overwrites).
+    trial_env_exists=0
+    if qga "test -f /srv/lab/trial-env/pyvenv.cfg" >/dev/null 2>&1; then
+        trial_env_exists=1
+    fi
 if [ "$CACHE_UP" = 1 ] && compgen -G "$CACHE_ROOT/wheels/trial-env/*.whl" >/dev/null; then
     whl_list="$(ls "$CACHE_ROOT"/wheels/trial-env | tr '\n' ' ')"
     qga "install -d -m 0755 -o mcp -g mcp /srv/lab/trial-env /srv/lab/wheelhouse && \
          cd /srv/lab/wheelhouse && \
          for w in $whl_list; do curl -fsS -o \"\$w\" \"$CACHE_URL/wheels/trial-env/\$w\" || exit 1; done && \
          chown -R mcp:mcp /srv/lab/wheelhouse && \
-         su - mcp -c 'podman run --rm -e HOME=/tmp --entrypoint uv \
+         { [ $trial_env_exists = 1 ] || su - mcp -c 'podman run --rm -e HOME=/tmp --entrypoint uv \
              -v /srv/lab/trial-env:/opt/trial-env lab-img-mcp \
-             venv /opt/trial-env' && \
+             venv /opt/trial-env'; } && \
          su - mcp -c 'podman run --rm -e HOME=/tmp --entrypoint uv \
              -v /srv/lab/trial-env:/opt/trial-env \
              -v /srv/lab/wheelhouse:/wheels lab-img-mcp \
@@ -651,13 +670,16 @@ if [ "$CACHE_UP" = 1 ] && compgen -G "$CACHE_ROOT/wheels/trial-env/*.whl" >/dev/
              numpy pandas scipy scikit-learn matplotlib reportlab'"
 else
     qga "install -d -m 0755 -o mcp -g mcp /srv/lab/trial-env && \
-         su - mcp -c 'podman run --rm -e HOME=/tmp --entrypoint uv \
+         { [ $trial_env_exists = 1 ] || su - mcp -c 'podman run --rm -e HOME=/tmp --entrypoint uv \
              -v /srv/lab/trial-env:/opt/trial-env lab-img-mcp \
-             venv /opt/trial-env' && \
+             venv /opt/trial-env'; } && \
          su - mcp -c 'podman run --rm -e HOME=/tmp --entrypoint uv \
              -v /srv/lab/trial-env:/opt/trial-env lab-img-mcp \
              pip install --python /opt/trial-env/bin/python --no-cache \
              numpy pandas scipy scikit-learn matplotlib reportlab'"
+fi
+
+    trial_env_ready || die "trial-env failed scientific import verification"
 fi
 
 note "episteme ingest token (generated, never committed)"
