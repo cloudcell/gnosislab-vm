@@ -39,8 +39,8 @@ done
 TARGET=${1:?"usage: ./30-ensure-lab-tools.sh <vm>|all [--rebuild-mcp-image]"}
 id -nG | grep -qw libvirt || exec sg libvirt -c "$0 $*"
 
-# labloop.conf carries the display target too — the ensure path renders
-# /etc/labloop/display.conf for the guest's login hook from it.
+# Record the preferred video mode without forcing XRandR at the greeter
+# or user session. SPICE/virtio negotiates the active mode.
 if [ -f "$REPO/labloop.conf" ]; then . "$REPO/labloop.conf"; fi
 RES_X="${LABLOOP_RES_X:-2560}"
 RES_Y="${LABLOOP_RES_Y:-1440}"
@@ -463,14 +463,9 @@ ensure_vm() {
         install -m 0644 -o root -g root /etc/labloop/.seccomp-next /etc/labloop/seccomp-labloop.json &&
         install -m 0644 -o root -g root /tmp/ensure-display.conf \
             /etc/labloop/display.conf &&
-        install -m 0755 -o root -g root /tmp/ensure-labloop-display.sh \
-            /usr/local/libexec/labloop-display.sh &&
-        install -m 0644 -o root -g root /tmp/ensure-labloop-display.desktop \
-            /etc/xdg/autostart/labloop-display.desktop &&
-        install -d -m 0755 /etc/lightdm/lightdm.conf.d &&
-        install -m 0644 -o root -g root \
-            /tmp/ensure-labloop-display-lightdm.conf \
-            /etc/lightdm/lightdm.conf.d/50-labloop-display.conf &&
+        rm -f /etc/lightdm/lightdm.conf.d/50-labloop-display.conf \
+              /etc/xdg/autostart/labloop-display.desktop \
+              /usr/local/libexec/labloop-display.sh &&
         systemd-tmpfiles --create /etc/tmpfiles.d/labloop.conf &&
         rm -rf /run/labloop-export &&
         install -d -m 0755 -o lab -g lab /srv/lab/incoming &&
