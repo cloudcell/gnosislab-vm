@@ -49,66 +49,22 @@ printf 'RES_X=%s\nRES_Y=%s\nREFRESH=%s\n' "$RES_X" "$RES_Y" "$REFRESH" \
     > "$WORK/display.conf"
 
 # ------------------------------------------------------------------
-# qemu guest-agent driver (exec + push)
+# Shared durable guest-agent driver. Inlined guest-exec-status polling
+# lost the process whenever QGA briefly stopped responding and could
+# report a truncated upload as successful. The maintained driver retries
+# transient RPC errors and verifies each guest-file-write byte count.
 # ------------------------------------------------------------------
-cat > "$WORK/qga.py" <<'PYEOF'
-import base64, json, subprocess, sys, time
-dom, mode, args = sys.argv[1], sys.argv[2], sys.argv[3:]
-def qga(payload):
-    try:
-        r = subprocess.run(["virsh","-c","qemu:///system","qemu-agent-command",
-                            dom, json.dumps(payload)],
-                           capture_output=True, text=True, check=True)
-    except subprocess.CalledProcessError as e:
-        sys.stderr.write((e.stderr or "") + (e.stdout or ""))
-        sys.exit(2)   # transport-level failure — caller may retry
-    return json.loads(r.stdout)["return"]
-if mode == "exec":
-    pid = qga({"execute":"guest-exec","arguments":
-               {"path":"/bin/sh","arg":["-c"," ".join(args)],
-                "capture-output":True}})["pid"]
-    for _ in range(600):
-        time.sleep(0.5)
-        st = qga({"execute":"guest-exec-status","arguments":{"pid":pid}})
-        if st.get("exited"):
-            sys.stdout.write(base64.b64decode(
-                st.get("out-data","") or "").decode("utf-8","replace"))
-            sys.stderr.write(base64.b64decode(
-                st.get("err-data","") or "").decode("utf-8","replace"))
-            sys.exit(st.get("exitcode",1))
-    sys.exit("guest-exec timeout")
-if mode == "push":
-    local, remote = args
-    h = qga({"execute":"guest-file-open","arguments":{"path":remote,"mode":"w+"}})
-    try:
-        with open(local,"rb") as f:
-            while chunk := f.read(48*1024):
-                qga({"execute":"guest-file-write","arguments":
-                     {"handle":h,"buf-b64":base64.b64encode(chunk).decode()}})
-    finally:
-        qga({"execute":"guest-file-close","arguments":{"handle":h}})
-PYEOF
-
-# transport hiccups (agent up but exec/file-open briefly refused — seen
-# right after boot or when /run was full) get retried; a genuine
-# in-guest exit code does not
+QGA_DRIVER="$REPO/scripts/qga.py"
+[ -f "$QGA_DRIVER" ] || die "missing QGA driver: $QGA_DRIVER"
 qga_exec() {
-    local vm=$1 rc=0 _; shift
-    for _ in 1 2 3 4 5; do
-        python3 "$WORK/qga.py" "$vm" exec "$@" && return 0 || rc=$?
-        [ "$rc" -eq 2 ] || return "$rc"
-        sleep 4
-    done
-    return 2
+    local vm=$1
+    shift
+    python3 "$QGA_DRIVER" "$vm" exec "$@"
 }
 qga_push() {
-    local vm=$1 rc=0 _; shift
-    for _ in 1 2 3 4 5; do
-        python3 "$WORK/qga.py" "$vm" push "$@" && return 0 || rc=$?
-        [ "$rc" -eq 2 ] || return "$rc"
-        sleep 4
-    done
-    return 2
+    local vm=$1
+    shift
+    python3 "$QGA_DRIVER" "$vm" push "$@"
 }
 
 rebuild_mcp_image() {
@@ -165,21 +121,51 @@ rebuild_mcp_image() {
 
 rebuild_exp_image() {
     local vm=$1
+    local stage="/var/lib/gnosislab-exp-recovery"
+    local expected_sha
     note "rebuilding experiment image from trusted host checkout (may take minutes)"
     mkdir -p "$WORK/experiment"
-    cp "$REPO/containers/experiment/Containerfile" "$REPO/containers/experiment/pip" "$WORK/experiment/"
+    cp "$REPO/containers/experiment/Containerfile" \
+       "$REPO/containers/experiment/pip" "$WORK/experiment/"
     tar -C "$WORK/experiment" -cf "$WORK/experiment.tar" .
-    qga_push "$vm" "$WORK/experiment.tar" /tmp/gnosislab-exp-build.tar || return 1
-    qga_exec "$vm" '
-        set -eu
+    expected_sha="$(sha256sum "$WORK/experiment.tar" | cut -d' ' -f1)"
+
+    # Prepare a root-only staging area first. Guest /tmp is not a safe
+    # transport destination and may be cleared during QGA disruptions.
+    qga_exec "$vm" "set -eu
+        test ! -L '$stage'
+        install -d -m 0700 -o root -g root '$stage'
+        test \\"\$(stat -c '%u:%a' '$stage')\\" = '0:700'" ||
+        { echo 'unsafe recovery staging directory' >&2; exit 1; }" ||
+        { echo "  FAIL: cannot prepare protected image staging" >&2; return 1; }
+
+    note "uploading trusted experiment context (SHA-256 verification)"
+    qga_push "$vm" "$WORK/experiment.tar" "$stage/context.part" ||
+        { echo "  FAIL: QGA upload interrupted; archive not installed" >&2; return 1; }
+
+    # Verify the exact bytes before any extraction or Podman build.
+    # A reconnect after guest-file-write must never be accepted as a
+    # completed transfer without this comparison.
+    qga_exec "$vm" "set -eu
+        test ! -L '$stage/context.part'
+        printf '%s  %s\\n' '$expected_sha' '$stage/context.part' |
+            sha256sum -c -
+        mv -f '$stage/context.part' '$stage/context.tar'" ||
+        { echo "  FAIL: image context checksum mismatch; build refused" >&2; return 1; }
+
+    # A durable guest-side job continues during brief QGA outages.
+    # Do not retry an unknown-state Podman build with a different PID.
+    note "building trusted lab-img-exp in exp rootless Podman"
+    qga_exec "$vm" "set -eu
         test ! -L /home/exp/build
         install -d -m 0755 -o exp -g exp /home/exp/build/experiment
-        tar -xf /tmp/gnosislab-exp-build.tar -C /home/exp/build/experiment
-        rm -f /tmp/gnosislab-exp-build.tar
+        tar -xf '$stage/context.tar' -C /home/exp/build/experiment
         chown -R exp:exp /home/exp/build
-        su - exp -c "podman build -t lab-img-exp -f /home/exp/build/experiment/Containerfile /home/exp/build/experiment"
-        su - exp -c "podman image exists lab-img-exp"
-        rm -rf /home/exp/build/experiment'
+        su - exp -c 'podman build -t lab-img-exp -f /home/exp/build/experiment/Containerfile /home/exp/build/experiment'
+        su - exp -c 'podman image exists lab-img-exp'
+        rm -rf /home/exp/build/experiment
+        rm -f '$stage/context.tar'" ||
+        { echo "  FAIL: experiment image build or verification failed" >&2; return 1; }
 }
 
 ensure_vm() {
@@ -188,7 +174,7 @@ ensure_vm() {
     virsh -c qemu:///system list --name | grep -qx "$vm" \
         || { echo "  skip: not running"; return 0; }
     qga_exec "$vm" "id -u" >/dev/null 2>&1 \
-        || { echo "  skip: guest-agent not answering"; return 0; }
+        || { echo "  FAIL: guest-agent is not responding in $vm" >&2; return 1; }
 
     note "pushing deploy files"
     for f in labloop-export labloop-exec labloop-build \
