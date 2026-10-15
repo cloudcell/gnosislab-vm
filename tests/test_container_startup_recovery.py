@@ -27,8 +27,13 @@ class ContainerRecovery(unittest.TestCase):
         self.assertIn('if test -e "$file"; then', UPGRADE)
         self.assertIn('chmod 0600 "$file"', UPGRADE)
         self.assertIn('su - mcp -c "test -r /srv/lab/mcp-state/ingest.env"', UPGRADE)
-        self.assertLess(UPGRADE.index('note "verifying mcp ingest token ownership"'),
+        self.assertLess(UPGRADE.index('note "verifying mcp ingest token ownership and traversal"'),
                         UPGRADE.index('note "restarting trusted container on protected runtime configuration"'))
+
+    def test_traversal_fix_is_mcp_only(self):
+        self.assertIn("setfacl -m u:mcp:--x /srv/lab", UPGRADE)
+        self.assertIn('test "$(stat -c %a "$file")" = 600', UPGRADE)
+        self.assertIn('fail "mcp still cannot read ingest.env"', UPGRADE)
 
     def test_health_port_expansion_is_deferred_to_container(self):
         self.assertIn("$$" + "{ML_EPISTEME_PORT}", MCP)

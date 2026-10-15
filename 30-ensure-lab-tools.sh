@@ -600,31 +600,71 @@ ensure_vm() {
                 /home/mcp/.config/containers/systemd/lab-cnt-mcp.container" \
             || { echo "  FAIL: mcp quadlet install"; return 1; }
     fi
-    # Restore the token-file access required by the mcp-owned Quadlet.
-    # Do not regenerate a valid existing token. A missing file receives
-    # a fresh random value; never display or copy the token to the lab user.
-    note "verifying mcp ingest token ownership"
+    # Verify the protected MCP token file before restarting Quadlet.
+    # Neither the token nor its value is logged, even on failure. The
+    # mcp account must be able to traverse /srv/lab while other accounts
+    # still cannot read /srv/lab/mcp-state (0700, mcp-owned).
+    note "verifying mcp ingest token ownership and traversal"
     qga_exec "$vm" '
         set -eu
-        path=/srv/lab/mcp-state
+        fail() { echo "ingest.env preflight: $*" >&2; exit 1; }
+        parent=/srv/lab
+        path="$parent/mcp-state"
         file="$path/ingest.env"
-        test ! -L "$path" && test -d "$path"
-        test ! -L "$file"
-        chown mcp:mcp "$path"
-        chmod 0700 "$path"
+        test -d /srv && test ! -L /srv ||
+            fail "/srv is missing or symlinked"
+        test -d "$parent" && test ! -L "$parent" ||
+            fail "/srv/lab is missing or symlinked"
+        test -d "$path" && test ! -L "$path" ||
+            fail "mcp-state directory is missing or symlinked"
+        test ! -L "$file" ||
+            fail "ingest.env is symlinked; refusing to follow it"
+
+        chown mcp:mcp "$path" ||
+            fail "cannot set mcp-state directory ownership"
+        chmod 0700 "$path" ||
+            fail "cannot restrict mcp-state directory permissions"
         if test -e "$file"; then
-            test -f "$file" || exit 1
-            chown mcp:mcp "$file"
-            chmod 0600 "$file"
+            test -f "$file" ||
+                fail "existing ingest.env is not a regular file"
         else
             umask 077
-            token="$(head -c 32 /dev/urandom | base64 -w0)"
-            printf "ML_EPISTEME_INGEST_TOKEN=%s\n" "$token" > "$file"
-            chown mcp:mcp "$file"
-            chmod 0600 "$file"
+            token="$(head -c 32 /dev/urandom | base64 -w0)" ||
+                fail "cannot generate ingest token"
+            (set -C; printf "ML_EPISTEME_INGEST_TOKEN=%s\n" "$token" > "$file") ||
+                fail "cannot create ingest token securely"
         fi
-        su - mcp -c "test -r /srv/lab/mcp-state/ingest.env"
-    ' || { echo "  FAIL: trusted MCP token permissions" >&2; return 1; }
+        chown mcp:mcp "$file" ||
+            fail "cannot set ingest.env ownership"
+        chmod 0600 "$file" ||
+            fail "cannot restrict ingest.env to mcp"
+
+        # The state directory may be secure and correctly owned while
+        # a sealed clone has /srv/lab without search permission for mcp.
+        # Grant ONLY mcp directory traversal, never general read access.
+        su - mcp -c "test -x /srv" ||
+            fail "mcp cannot traverse /srv"
+        if ! su - mcp -c "test -x /srv/lab"; then
+            command -v setfacl >/dev/null 2>&1 ||
+                fail "mcp cannot traverse /srv/lab and ACL tooling is absent"
+            setfacl -m u:mcp:--x /srv/lab ||
+                fail "cannot grant mcp traverse-only ACL on /srv/lab"
+        fi
+        su - mcp -c "test -x /srv/lab" ||
+            fail "mcp still cannot traverse /srv/lab"
+        su - mcp -c "test -x /srv/lab/mcp-state" ||
+            fail "mcp cannot traverse mcp-state after ownership repair"
+        su - mcp -c "test -r /srv/lab/mcp-state/ingest.env" ||
+            fail "mcp still cannot read ingest.env"
+        test "$(stat -c %U:%G "$path")" = mcp:mcp ||
+            fail "mcp-state owner verification failed"
+        test "$(stat -c %a "$path")" = 700 ||
+            fail "mcp-state mode verification failed"
+        test "$(stat -c %U:%G "$file")" = mcp:mcp ||
+            fail "ingest.env owner verification failed"
+        test "$(stat -c %a "$file")" = 600 ||
+            fail "ingest.env mode verification failed"
+    ' || { echo "  FAIL: trusted MCP token permissions (details above)" >&2; return 1; }
 
     note "restarting trusted container on protected runtime configuration"
     qga_exec "$vm" "su - mcp -c 'XDG_RUNTIME_DIR=/run/user/\$(id -u) \
