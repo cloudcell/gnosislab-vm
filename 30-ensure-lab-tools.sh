@@ -216,6 +216,18 @@ ensure_vm() {
         rm -f /home/lab/.config/.labloop-clock-done &&
         timedatectl set-timezone UTC' || { echo "  FAIL: UTC clock setup"; return 1; }
 
+    # Diagnose the trusted image separately from its configuration.
+    # Do not treat a failed rootless Podman probe as evidence that an
+    # image has disappeared. Avoid printing potentially sensitive env.
+    if ! qga_exec "$vm" "su - mcp -c 'podman image exists lab-img-mcp'" >/dev/null 2>&1; then
+        echo "  FAIL: mcp user cannot see local image lab-img-mcp" >&2
+        echo "  Check rootless Podman storage and user runtime before rebuilding:" >&2
+        echo "    python3 scripts/qga.py $vm exec \"su - mcp -c 'podman images --format {{.Repository}}:{{.Tag}}'\"" >&2
+        echo "  If the image is genuinely absent, use the explicit rebuild flag." >&2
+        echo "  refusing an insecure partial upgrade" >&2
+        return 1
+    fi
+
     # ports.env derives from the VM's OWN lab-img-mcp image — never the
     # repo: the render must match the vintage actually installed
     # (/opt/gnosislab on packaged images, /opt/ml-scientist on
@@ -227,7 +239,7 @@ ensure_vm() {
     local ports_env_txt img_probe
     img_probe=$(qga_exec "$vm" "su - mcp -c 'podman image inspect lab-img-mcp >/dev/null 2>&1 &&
         podman run --pull=never --network=none --rm --entrypoint /bin/sh lab-img-mcp -c \"cat /opt/gnosislab/ports.env\"'" 2>&1) || {
-        echo "  note: image port probe failed: $img_probe" >&2
+        echo "  note: local image exists but offline port probe failed: $img_probe" >&2
         img_probe=""
     }
     ports_env_txt=$(printf '%s\n' "$img_probe" | sed -n '/^ML_[A-Z_]*=/p')
