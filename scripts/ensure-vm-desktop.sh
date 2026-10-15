@@ -57,6 +57,22 @@ if [ -n "${LABLOOP_PATCHES_DIR:-}" ]; then
     done
 fi
 
+# Trusted copies for session-time checksum comparison. Install through QGA
+# into root-owned locations, never from the lab-writable workspace.
+qga 'install -d -m 0755 -o root -g root /usr/local/share/gnosislab/desktop /usr/local/libexec /etc/xdg/autostart'
+push "$REPO/deploy/opencode.desktop" /usr/local/share/gnosislab/desktop/opencode.desktop
+push "$REPO/deploy/Lab-Dashboard.desktop" /usr/local/share/gnosislab/desktop/Lab-Dashboard.desktop
+push "$REPO/deploy/gnosislab-desktop-trust.sh" /usr/local/libexec/gnosislab-desktop-trust.sh
+push "$REPO/deploy/gnosislab-desktop-trust.desktop" /etc/xdg/autostart/gnosislab-desktop-trust.desktop
+qga 'chown root:root /usr/local/share/gnosislab/desktop/*.desktop /usr/local/libexec/gnosislab-desktop-trust.sh /etc/xdg/autostart/gnosislab-desktop-trust.desktop &&
+    chmod 0644 /usr/local/share/gnosislab/desktop/*.desktop /etc/xdg/autostart/gnosislab-desktop-trust.desktop &&
+    chmod 0755 /usr/local/libexec/gnosislab-desktop-trust.sh'
+# If a real GUI session is active, trust now without logout. Otherwise the
+# system-wide XDG autostart hook runs in lab's next graphical session.
+qga 'if [ -S /run/user/$(id -u lab)/bus ]; then
+    su - lab -c "/usr/local/libexec/gnosislab-desktop-trust.sh" || true
+fi'
+
 # Install root-owned executable directly, without a lab-writable /tmp stage.
 push "$REPO/deploy/opencode-lab" /usr/local/bin/opencode-lab
 qga 'set -eu
