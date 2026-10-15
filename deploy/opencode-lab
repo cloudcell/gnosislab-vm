@@ -1,3 +1,17 @@
-#!/bin/bash
-# opencode launcher — always starts in the driver authoring workspace
-cd /home/lab/workspace && exec opencode "$@"
+#!/usr/bin/env bash
+# Start OpenCode inside the driver workspace, never under root.
+set -e
+if [ "$(id -u)" = 0 ]; then
+    echo "OpenCode must run as lab, not root" >&2
+    exit 1
+fi
+if ! cd /home/lab/workspace; then
+    echo "Missing driver workspace: /home/lab/workspace" >&2
+    exit 1
+fi
+if ! command -v opencode >/dev/null 2>&1; then
+    echo "OpenCode CLI not installed or not on PATH." >&2
+    echo "Check: command -v opencode; ls -l /usr/local/bin/opencode" >&2
+    exit 127
+fi
+exec opencode "$@"
