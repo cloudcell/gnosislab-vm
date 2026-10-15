@@ -9,7 +9,7 @@
 #       each of which MUST resolve inside /srv/lab/exchange. Everyday
 #       "pull results out" channel.
 #
-#   sudo labloop-export --all         (arg-pinned sudoers, runs as root)
+#   labloop-export --all              (operator root via host QEMU guest agent)
 #       — the hardcoded lab-work set: exchange, experiments, mcp-state,
 #       mcp+exp podman volumes, full journal + rendered logs, workspace,
 #       agent state (opencode + VSCodium), opt-local volume. No
@@ -73,9 +73,8 @@ if [ "$SELFTEST" = 1 ]; then
     trap 'rm -rf -- "$STAGE"' EXIT
 fi
 
-# --all is NOPASSWD-invocable by lab (agents included): it quiesces
-# both containers and stages gigabytes, so it must not be loopable.
-# A bounded min-interval makes it a deliberate, not an automated, act.
+# --all is operator-only, invoked as root from the host-side QEMU guest
+# agent. It quiesces both containers; rate-limit even authorized calls.
 if [ "$MODE" = all ]; then
     MARK="$BASE/.last-all"
     if [ -e "$MARK" ]; then
