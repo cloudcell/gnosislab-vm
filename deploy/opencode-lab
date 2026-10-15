@@ -5,8 +5,15 @@ if [ "$(id -u)" = 0 ]; then
     echo "OpenCode must run as lab, not root" >&2
     exit 1
 fi
-if ! cd /home/lab/workspace; then
-    echo "Missing driver workspace: /home/lab/workspace" >&2
+# Safe local repair for old clones: creating the lab-owned authoring
+# directory must not depend on the trusted MCP image being healthy.
+if [ -L /home/lab/workspace ]; then
+    echo "Refusing symlinked driver workspace" >&2
+    exit 1
+fi
+if ! mkdir -p /home/lab/workspace/experiments ||
+   ! cd /home/lab/workspace; then
+    echo "Cannot create or enter /home/lab/workspace" >&2
     exit 1
 fi
 if ! command -v opencode >/dev/null 2>&1; then
