@@ -33,8 +33,13 @@ CAP_ALL=$((8 * 1024 * 1024 * 1024))    # --all staging cap
 die()  { logger -t "$TAG" -- "refused: $*"; echo "labloop-export: $*" >&2; exit 1; }
 note() { logger -t "$TAG" -- "$*"; echo "labloop-export: $*" >&2; }
 
-MODE=path
+MODE=path SELFTEST=0
+# Isolated dry-run round-trip for batteries. Never replace a user's staged
+# manifest or archive during a routine readiness/security check.
+[ "${1:-}" = "--self-test" ] && { SELFTEST=1; shift; }
 [ "${1:-}" = "--all" ] && { MODE=all; shift; }
+[ "$SELFTEST" = 0 ] || { [ "$MODE" = path ] && [ "$#" -eq 1 ] ||
+    die "--self-test requires exactly one exchange file"; }
 
 # ---------------------------------------------------------------
 # staging root: created by tmpfiles at boot (or a prior root run).
@@ -57,6 +62,16 @@ fi
 # staging copy of the first
 exec 9>"$STAGE/.lock"
 flock -n 9 || die "another labloop-export is already running"
+
+# The self-test writes everything under a private temporary subdirectory,
+# sharing the parent's export lock but never deleting/overwriting its staged
+# real export. Always clean up on success, failure and interruption.
+if [ "$SELFTEST" = 1 ]; then
+    stage_parent=$STAGE
+    STAGE=$(mktemp -d "$stage_parent/.selftest.XXXXXXXX") ||
+        die "cannot create isolated export self-test staging"
+    trap 'rm -rf -- "$STAGE"' EXIT
+fi
 
 # --all is NOPASSWD-invocable by lab (agents included): it quiesces
 # both containers and stages gigabytes, so it must not be loopable.
@@ -105,6 +120,11 @@ if [ "$MODE" = path ]; then
         n=$((n + 1))
         rel=exchange
         [ "$rp" != "$EXCHANGE" ] && rel="exchange/$(basename "$rp")"
+        if [ "$SELFTEST" = 1 ]; then
+            [ -f "$rp" ] && [ ! -L "$p" ] || die "self-test input must be a regular exchange file"
+            selftest_rel=$rel
+            selftest_source=$rp
+        fi
         copy_in "$rp" "$rel"
     done
     note "path mode: staged $n path(s) under $EXCHANGE"
@@ -239,4 +259,27 @@ chmod 0600 "$STAGE/manifest.json"
 rm -rf "$STAGE/stage"
 
 n=$(python3 -c "import json;print(len(json.load(open('$STAGE/manifest.json'))['files']))")
-note "$MODE export complete: $n files, $staged bytes staged -> $STAGE/export.tar.gz"
+if [ "$SELFTEST" = 1 ]; then
+    # Check the full round trip (source -> staged copy -> archive -> manifest).
+    # Do not extract untrusted archive paths onto the filesystem.
+    python3 - "$STAGE" "$selftest_source" "$selftest_rel" <<'PY_SELFTEST' ||
+        die "export self-test archive/manifest verification failed"
+import hashlib, json, pathlib, sys, tarfile
+stage, source, rel = map(pathlib.Path, sys.argv[1:])
+archive = stage / "export.tar.gz"
+meta = json.loads((stage / "manifest.json").read_text())
+digest = lambda b: hashlib.sha256(b).hexdigest()
+raw = source.read_bytes()
+assert meta["mode"] == "path"
+assert meta["files"] == [{"path": str(rel), "sha256": digest(raw), "size": len(raw)}]
+assert meta["tarball"]["sha256"] == digest(archive.read_bytes())
+with tarfile.open(archive, "r:gz") as tf:
+    member = tf.getmember("./" + str(rel))
+    assert member.isfile()
+    stream = tf.extractfile(member)
+    assert stream is not None and stream.read() == raw
+PY_SELFTEST
+    note "isolated export self-test passed: original staged user export preserved"
+else
+    note "$MODE export complete: $n files, $staged bytes staged -> $STAGE/export.tar.gz"
+fi
