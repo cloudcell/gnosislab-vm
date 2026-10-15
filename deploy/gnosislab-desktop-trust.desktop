@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=GnosisLab desktop launcher trust
+Comment=Verify host-provisioned launchers and refresh XFCE trust metadata
+Exec=/usr/local/libexec/gnosislab-desktop-trust.sh
+OnlyShowIn=XFCE;
+X-GNOME-Autostart-enabled=true
+NoDisplay=true
