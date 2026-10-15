@@ -547,36 +547,69 @@ if [ "$CACHE_UP" = 1 ]; then
     img_mcp=$(basename "$(ls -t "$CACHE_ROOT"/images/lab-img-mcp-*.tar 2>/dev/null | head -1)" 2>/dev/null || true)
     img_exp=$(basename "$(ls -t "$CACHE_ROOT"/images/lab-img-exp-*.tar 2>/dev/null | head -1)" 2>/dev/null || true)
 fi
+# An imported image retains the config digest recorded by the Docker
+# archive manifest. Compare that digest against both rootless stores,
+# not merely the presence of a mutable :latest tag.
+image_archive_config_id() {
+    python3 - "$1" "$2" <<'PY_IMAGE_ID'
+import json, re, sys, tarfile
+with tarfile.open(sys.argv[1], "r") as archive:
+    stream = archive.extractfile("manifest.json")
+    if stream is None:
+        raise SystemExit("missing image manifest")
+    with stream:
+        images = json.load(stream)
+tag = f"localhost/lab-img-{sys.argv[2]}:latest"
+if len(images) != 1 or tag not in images[0].get("RepoTags", []):
+    raise SystemExit("cached archive has wrong image tag")
+config = images[0]["Config"]
+if not re.fullmatch(r"[a-f0-9]{64}\.json", config):
+    raise SystemExit("unexpected config digest in archive")
+print(config[:-5])
+PY_IMAGE_ID
+}
 if [ -n "$img_mcp" ] && [ -n "$img_exp" ]; then
-    # Guest-agent commands run as root and create mode-0600 files with a
-    # restrictive umask. Rootless Podman cannot load those from /tmp.
-    # Stage under a root-owned, non-writable-to-users directory instead,
-    # validate bytes against the verified host cache, then grant each
-    # service account read access ONLY to its own archive.
-    # Do not copy multi-GiB archives into both root and user home trees.
-    mcp_sha=$(sha256sum "$CACHE_ROOT/images/$img_mcp" | cut -d' ' -f1)
-    exp_sha=$(sha256sum "$CACHE_ROOT/images/$img_exp" | cut -d' ' -f1)
-    import_dir=/var/cache/gnosislab/image-import
-    qga "set -eu; \
-         test ! -L /var/cache/gnosislab && test ! -L '$import_dir' && \
-         install -d -m 0755 -o root -g root \
-             /var/cache/gnosislab '$import_dir' && \
-         trap 'rm -f \"$import_dir/$img_mcp\" \"$import_dir/$img_exp\"' EXIT; \
-         curl -fSL --retry 4 --retry-connrefused --connect-timeout 15 \
-             -o '$import_dir/$img_mcp' '$CACHE_URL/images/$img_mcp' && \
-         printf '%s  %s\n' '$mcp_sha' '$import_dir/$img_mcp' | sha256sum -c - && \
-         chown mcp:mcp '$import_dir/$img_mcp' && \
-         chmod 0600 '$import_dir/$img_mcp' && \
-         curl -fSL --retry 4 --retry-connrefused --connect-timeout 15 \
-             -o '$import_dir/$img_exp' '$CACHE_URL/images/$img_exp' && \
-         printf '%s  %s\n' '$exp_sha' '$import_dir/$img_exp' | sha256sum -c - && \
-         chown exp:exp '$import_dir/$img_exp' && \
-         chmod 0600 '$import_dir/$img_exp' && \
-         su - mcp -c 'podman load -i $import_dir/$img_mcp' && \
-         su - exp -c 'podman load -i $import_dir/$img_exp' && \
-         su - mcp -c 'podman image exists lab-img-mcp' && \
-         su - exp -c 'podman image exists lab-img-exp'" \
-        || die "cached OCI image import failed in $VM; check cache route, checksum and rootless Podman logs"
+    expected_mcp=$(image_archive_config_id "$CACHE_ROOT/images/$img_mcp" mcp) \
+        || die "cannot inspect cached MCP image identity"
+    expected_exp=$(image_archive_config_id "$CACHE_ROOT/images/$img_exp" exp) \
+        || die "cannot inspect cached experiment image identity"
+    if qga "set -eu; \
+         mcp_id=\$(su - mcp -c 'podman image inspect lab-img-mcp --format \"{{.Id}}\"'); \
+         exp_id=\$(su - exp -c 'podman image inspect lab-img-exp --format \"{{.Id}}\"'); \
+         { test \"\$mcp_id\" = 'sha256:$expected_mcp' || test \"\$mcp_id\" = '$expected_mcp'; } && \
+         { test \"\$exp_id\" = 'sha256:$expected_exp' || test \"\$exp_id\" = '$expected_exp'; }" >/dev/null 2>&1; then
+        echo "    cached image identities already match; skipping large downloads"
+    else
+        # Guest-agent commands run as root and create mode-0600 files with a
+        # restrictive umask. Rootless Podman cannot load those from /tmp.
+        # Stage under a root-owned, non-writable-to-users directory instead,
+        # validate bytes against the verified host cache, then grant each
+        # service account read access ONLY to its own archive.
+        # Do not copy multi-GiB archives into both root and user home trees.
+        mcp_sha=$(sha256sum "$CACHE_ROOT/images/$img_mcp" | cut -d' ' -f1)
+        exp_sha=$(sha256sum "$CACHE_ROOT/images/$img_exp" | cut -d' ' -f1)
+        import_dir=/var/cache/gnosislab/image-import
+        qga "set -eu; \
+             test ! -L /var/cache/gnosislab && test ! -L '$import_dir' && \
+             install -d -m 0755 -o root -g root \
+                 /var/cache/gnosislab '$import_dir' && \
+             trap 'rm -f \"$import_dir/$img_mcp\" \"$import_dir/$img_exp\"' EXIT; \
+             curl -fSL --retry 4 --retry-connrefused --connect-timeout 15 \
+                 -o '$import_dir/$img_mcp' '$CACHE_URL/images/$img_mcp' && \
+             printf '%s  %s\n' '$mcp_sha' '$import_dir/$img_mcp' | sha256sum -c - && \
+             chown mcp:mcp '$import_dir/$img_mcp' && \
+             chmod 0600 '$import_dir/$img_mcp' && \
+             curl -fSL --retry 4 --retry-connrefused --connect-timeout 15 \
+                 -o '$import_dir/$img_exp' '$CACHE_URL/images/$img_exp' && \
+             printf '%s  %s\n' '$exp_sha' '$import_dir/$img_exp' | sha256sum -c - && \
+             chown exp:exp '$import_dir/$img_exp' && \
+             chmod 0600 '$import_dir/$img_exp' && \
+             su - mcp -c 'podman load -i $import_dir/$img_mcp' && \
+             su - exp -c 'podman load -i $import_dir/$img_exp' && \
+             su - mcp -c 'podman image exists lab-img-mcp' && \
+             su - exp -c 'podman image exists lab-img-exp'" \
+            || die "cached OCI image import failed in $VM; check cache route, checksum and rootless Podman logs"
+    fi
 else
     qga "su - mcp -c 'podman build -t lab-img-mcp \
          --build-arg GNOSISLAB_VERSION=$GNOSISLAB_VER \
@@ -601,15 +634,34 @@ note "trial interpreter env: /srv/lab/trial-env -> /opt/trial-env (volume; survi
 # exists, so an unpopulated dir degrades to the slim interpreter.
 # wheels from the cache when available: the bundle is resolved inside
 # python:3.12-slim at prefetch time so the tags match this interpreter.
+# Resume without clearing an environment installed on a previous run.
+# Validate from inside the trusted image, because venv Python symlinks
+# resolve to container paths, not paths on the VM host.
+trial_env_ready() {
+    qga "su - mcp -c 'podman run --rm --pull=never --network=none \
+        -e HOME=/tmp --entrypoint /opt/trial-env/bin/python \
+        -v /srv/lab/trial-env:/opt/trial-env:ro lab-img-mcp \
+        -c \"import numpy, pandas, scipy, sklearn, matplotlib, reportlab\"'" \
+        >/dev/null 2>&1
+}
+if trial_env_ready; then
+    echo "    existing scientific trial-env verified; reuse without modification"
+else
+    # An incomplete venv already has pyvenv.cfg. Install missing wheels
+    # into it rather than recreating it (uv refuses overwrites).
+    trial_env_exists=0
+    if qga "test -f /srv/lab/trial-env/pyvenv.cfg" >/dev/null 2>&1; then
+        trial_env_exists=1
+    fi
 if [ "$CACHE_UP" = 1 ] && compgen -G "$CACHE_ROOT/wheels/trial-env/*.whl" >/dev/null; then
     whl_list="$(ls "$CACHE_ROOT"/wheels/trial-env | tr '\n' ' ')"
     qga "install -d -m 0755 -o mcp -g mcp /srv/lab/trial-env /srv/lab/wheelhouse && \
          cd /srv/lab/wheelhouse && \
          for w in $whl_list; do curl -fsS -o \"\$w\" \"$CACHE_URL/wheels/trial-env/\$w\" || exit 1; done && \
          chown -R mcp:mcp /srv/lab/wheelhouse && \
-         su - mcp -c 'podman run --rm -e HOME=/tmp --entrypoint uv \
+         { [ $trial_env_exists = 1 ] || su - mcp -c 'podman run --rm -e HOME=/tmp --entrypoint uv \
              -v /srv/lab/trial-env:/opt/trial-env lab-img-mcp \
-             venv /opt/trial-env' && \
+             venv /opt/trial-env'; } && \
          su - mcp -c 'podman run --rm -e HOME=/tmp --entrypoint uv \
              -v /srv/lab/trial-env:/opt/trial-env \
              -v /srv/lab/wheelhouse:/wheels lab-img-mcp \
@@ -618,13 +670,16 @@ if [ "$CACHE_UP" = 1 ] && compgen -G "$CACHE_ROOT/wheels/trial-env/*.whl" >/dev/
              numpy pandas scipy scikit-learn matplotlib reportlab'"
 else
     qga "install -d -m 0755 -o mcp -g mcp /srv/lab/trial-env && \
-         su - mcp -c 'podman run --rm -e HOME=/tmp --entrypoint uv \
+         { [ $trial_env_exists = 1 ] || su - mcp -c 'podman run --rm -e HOME=/tmp --entrypoint uv \
              -v /srv/lab/trial-env:/opt/trial-env lab-img-mcp \
-             venv /opt/trial-env' && \
+             venv /opt/trial-env'; } && \
          su - mcp -c 'podman run --rm -e HOME=/tmp --entrypoint uv \
              -v /srv/lab/trial-env:/opt/trial-env lab-img-mcp \
              pip install --python /opt/trial-env/bin/python --no-cache \
              numpy pandas scipy scikit-learn matplotlib reportlab'"
+fi
+
+    trial_env_ready || die "trial-env failed scientific import verification"
 fi
 
 note "episteme ingest token (generated, never committed)"
