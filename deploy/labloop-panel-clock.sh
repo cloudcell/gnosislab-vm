@@ -12,7 +12,7 @@ export DISPLAY="${DISPLAY:-:0}"
 clock_plugin=""
 for _ in $(seq 30); do
     clock_plugin="$(xfconf-query -c xfce4-panel -lv 2>/dev/null | awk '
-        $1 ~ /^\/plugins\/plugin-[0-9]+$/ && $2 == "clock" {
+        $1 ~ /^\/plugins\/plugin-[0-9]+$/ && $2 == "clock" || $2 == "datetime" {
             sub(".*/", "", $1); print $1; exit
         }')"
     [ -n "$clock_plugin" ] && break
@@ -23,10 +23,12 @@ if [ -z "$clock_plugin" ]; then
     exit 1
 fi
 
-# Write live xfconf state: XFCE's digital clock uses strftime(3).
+# Write live xfconf state, with an explicit UTC label. XFCE plugin builds
+# vary: classic clock uses digital-time-format; datetime uses time-format.
+# Setting both is harmless and supports both plugin variants.
 # Use the plugin-local timezone rather than relying on the host's TZ.
 # Create new properties, or update existing ones, then verify both.
-for setting in "timezone=UTC" "digital-time-format=%H:%M %Z"; do
+for setting in "timezone=UTC" "digital-time-format=%H:%M UTC" "time-format=%H:%M UTC"; do
     property="/plugins/$clock_plugin/${setting%%=*}"
     value="${setting#*=}"
     current="$(xfconf-query -c xfce4-panel -p "$property" 2>/dev/null || true)"
