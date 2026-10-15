@@ -1,5 +1,5 @@
 {
-  "update": "notify",
+  "autoupdate": false,
   "instructions": ["/home/lab/AGENT-LAB-GUIDE.md"],
   "mcp": {
     "servers": {
