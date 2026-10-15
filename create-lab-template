@@ -784,10 +784,15 @@ else
 fi
 if [ -n "$vsix_list" ]; then
     for v in $vsix_list; do
-        qga "curl -fsS -o '/tmp/$v' '$CACHE_URL/pkgs/$v'"
-        # the rm must run as root — /tmp is sticky (1777), so lab cannot
-        # delete a root-owned file: 'Operation not permitted'
-        qga_lab "codium --install-extension '/tmp/$v'" && qga "rm -f '/tmp/$v'"
+        # QGA downloads as root with restrictive umask; only lab needs
+        # to read each VSIX, so grant ownership without world-read access.
+        qga "set -eu; curl -fSL -o '/tmp/$v' '$CACHE_URL/pkgs/$v' && \
+             chown lab:lab '/tmp/$v' && chmod 0600 '/tmp/$v'" \
+            || die "failed to stage VSIX $v"
+        qga_lab "codium --install-extension '/tmp/$v' && \
+                 codium --list-extensions | grep -Fxi '${v%-*}'" \
+            || die "failed to install/verify VSIX $v"
+        qga "rm -f '/tmp/$v'" || die "failed to clean VSIX $v"
     done
 else
     qga_lab "codium --install-extension ZooCodeOrganization.zoo-code && \
@@ -881,7 +886,8 @@ fi
 qga_push "$REPO/deploy/opencode.json" /tmp/opencode.json
 qga_push "$REPO/deploy/opencode.jsonc" /tmp/opencode.jsonc
 qga_push "$REPO/deploy/configure-host-models.py" /tmp/configure-host-models.py
-qga "install -d -m 0755 -o lab -g lab /home/lab/.config/opencode && \
+qga "test ! -L /home/lab/Desktop && \
+     install -d -m 0755 -o lab -g lab /home/lab/Desktop /home/lab/.config/opencode && \
      install -m 0644 -o lab -g lab /tmp/opencode.json \
          /home/lab/.config/opencode/opencode.json && \
      install -m 0644 -o lab -g lab /tmp/opencode.jsonc \
