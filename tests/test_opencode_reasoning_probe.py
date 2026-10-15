@@ -5,7 +5,7 @@ from pathlib import Path
 import unittest
 
 ROOT=Path(__file__).resolve().parents[1]
-spec=importlib.util.spec_from_file_location("effort_probe",ROOT/"deploy/probe-opencode-reasoning.py")
+spec=importlib.util.spec_from_file_location("effort_probe",ROOT/"deploy/configure-host-models.py")
 mod=importlib.util.module_from_spec(spec)
 spec.loader.exec_module(mod)
 

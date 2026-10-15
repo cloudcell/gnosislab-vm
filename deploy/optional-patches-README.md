@@ -1,49 +1,31 @@
-# Optional OpenCode local-model setup
+# Optional OpenCode V2 host-model configuration
 
-Use `configure-host-models.py` **inside the VM** as the `lab` user.
-It is opt-in, does not launch any models, and discovers their exact IDs
-from a reachable OpenAI-compatible server.
+The single `configure-host-models.py` script discovers and registers OpenAI-compatible host models. It never assumes that a model supports reasoning efforts.
 
-Typical setup with a vLLM server on the libvirt host:
+Inside the VM as `lab`:
+
+```bash
+python3 ~/Desktop/optional-patches/configure-host-models.py
+```
+
+By default it discovers model IDs through `/v1/models` on `http://192.168.122.1:8002/v1`, adds new entries without deleting existing model settings or variants, and leaves the server's default reasoning behavior unchanged.
+
+For a different endpoint or an explicit context window:
 
 ```bash
 python3 ~/Desktop/optional-patches/configure-host-models.py \
-  --url http://192.168.122.1:8002/v1
+  --url http://192.168.122.1:8002/v1 --context 262144 --output 8192
 ```
 
-If the server advertises a 262144-token context window, you can set it
-explicitly after verifying that the model and runtime actually support it:
+Only specify context/output limits that the running model actually supports. To test reasoning support for a particular model, first run a dry run:
 
 ```bash
 python3 ~/Desktop/optional-patches/configure-host-models.py \
-  --url http://192.168.122.1:8002/v1 \
-  --context 262144 --output 8192
+  --model qwen38 --probe-reasoning --dry-run
 ```
 
-The script writes the local provider to `~/.config/opencode/opencode.jsonc`,
-retaining unrelated settings in plain JSON configuration and refusing to
-overwrite unrecognized commented JSONC. Restart OpenCode afterward.
+Then omit `--dry-run` to save its verified efforts. To probe every model returned by discovery, use `--probe-reasoning` without `--model`. This sends real inference requests, so it may be slow. An invalid-effort negative control detects endpoints which ignore `reasoning_effort`; rejected or uncertain efforts are never advertised as supported. Any inconclusive model aborts the whole change, leaving the config unchanged.
 
-For an endpoint that is not reachable, fix its bind address, firewall or
-guest-to-host networking first. Do not open the trusted MCP network or
-grant the experiment container access to the host to make this work.
+The script writes a private backup before modifying `~/.config/opencode/opencode.jsonc`, does not overwrite unrelated providers, and retains user settings. A changed endpoint requires effort revalidation; existing manually defined variants are not deleted automatically. If comments occur inside the managed host-local provider, the script refuses to rewrite them rather than discarding those comments. Reload/restart OpenCode after saving.
 
-Additional operator-supplied patches may be installed via
-`LABLOOP_PATCHES_DIR=/path/to/private/patches` on the **host** when
-running the desktop repair. Nothing in this directory is executed
-automatically.
-
-## Per-model reasoning efforts (OpenCode V2)
-
-Do not assume every served model accepts the same effort levels. Probe **each model separately** using the real `/v1/chat/completions` API:
-
-```bash
-python3 ~/Desktop/optional-patches/probe-opencode-reasoning.py \
-  --model qwen38 --dry-run
-```
-
-Once the results match the served model, remove `--dry-run` to update **only** that model's V2 `variants` array. For a verified server default of `xhigh` you may additionally pass `--default-effort xhigh`; otherwise the script leaves the server default in control. It will never infer a default from the largest effort name.
-
-The script sends an invalid effort negative control, then probes `none`, `minimal`, `low`, `medium`, `high`, `xhigh`, and `max` individually. It rejects inconclusive probes and refuses to overwrite JSONC comments inside the target model. Other model entries, MCP servers, instructions, and unrelated JSONC remain untouched. It creates a one-time `.reasoning-backup`.
-
-**Two independent verification requirements:** This script establishes that the API endpoint validates and accepts particular values. It **cannot prove** OpenCode forwards each selected variant. For that, check the actual outgoing `reasoning_effort` in OpenCode's request body using a trusted HTTP logging reverse proxy or equivalent, and verify Ctrl+T cycles through exactly the configured variants without HTTP 400 responses. Never treat a TUI variant label or HTTP 200 alone as transport verification.
+**Important:** API validation alone cannot prove that OpenCode forwards each selected variant. Confirm Ctrl+T cycles over the expected variants and inspect outgoing API requests where possible. Do not expose the trusted MCP network or hostile experiment container to the host to support model discovery.
