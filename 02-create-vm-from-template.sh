@@ -201,12 +201,8 @@ echo "    otp written: $img_dir/$vm.otp (mode 400)"
 # Transfer first-login hook as files, not an oversized guest-exec command.
 cat > "$WORK/lab-first-login" <<'FIRSTLOGIN'
 #!/bin/bash
-for f in "$HOME"/Desktop/*.desktop; do
-    [ -e "$f" ] || continue
-    gio set "$f" metadata::trusted true 2>/dev/null
-    set -- $(sha256sum "$f" 2>/dev/null)
-    gio set "$f" metadata::xfce-exe-checksum "$1" 2>/dev/null
-done
+# Desktop launcher trust is handled by the session autostart helper,
+# which only approves launchers matching root-owned host originals.
 stamp=$(cat "$HOME/.config/lab-pw-stamp" 2>/dev/null)
 set -- $(passwd -S "$USER" 2>/dev/null); lastchg=$3
 if [ -n "$stamp" ] && [ "$lastchg" != "$stamp" ]; then
