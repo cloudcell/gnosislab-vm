@@ -198,79 +198,17 @@ fi
 # ------------------------------------------------------------------
 # qemu guest-agent driver (inlined; exec + chunked file push)
 # ------------------------------------------------------------------
-cat > "$WORK/qga.py" <<'PYEOF'
-import base64, json, subprocess, sys, time
-dom, mode, args = sys.argv[1], sys.argv[2], sys.argv[3:]
-def qga(payload):
-    r = subprocess.run(["virsh","-c","qemu:///system","qemu-agent-command",
-                        dom, json.dumps(payload)],
-                       capture_output=True, text=True, check=True)
-    return json.loads(r.stdout)["return"]
-if mode == "ping":
-    print("agent-ok"); sys.exit(0)
-if mode == "exec":
-    user = None
-    if args[:1] == ["--as"]:
-        user, args = args[1], args[2:]
-    cmd = " ".join(args)
-    # guest-exec-status only returns output AFTER exit — so redirect the
-    # command to a guest logfile and tail it via quick secondary execs
-    # for live progress. rc goes to a separate file: the wrapping shell
-    # always exits 0, so st.exitcode would lie. Files are per-USER —
-    # /tmp is sticky, so e.g. 'lab' cannot truncate root's log, which
-    # would silently run nothing and report the previous rc.
-    tag = user or "root"
-    log, rcf = "/tmp/qga-cmd-%s.log" % tag, "/tmp/qga-cmd-%s.rc" % tag
-    inner = ("rm -f %s; { %s ; } > %s 2>&1; echo $? > %s"
-             % (rcf, cmd, log, rcf))
-    path, argv = ("/bin/su", ["-", user, "-c", inner]) if user \
-                 else ("/bin/sh", ["-c", inner])
-    pid = qga({"execute":"guest-exec","arguments":
-               {"path":path,"arg":argv,"capture-output":True}})["pid"]
-    def quick(c):
-        p = qga({"execute":"guest-exec","arguments":
-                 {"path":"/bin/sh","arg":["-c",c],"capture-output":True}})["pid"]
-        for _ in range(50):
-            s = qga({"execute":"guest-exec-status","arguments":{"pid":p}})
-            if s.get("exited"):
-                return base64.b64decode(s.get("out-data","") or "")
-            time.sleep(0.2)
-        return b""
-    off = 0
-    for _ in range(1800):                       # up to ~60 min (image builds)
-        time.sleep(2)
-        st = qga({"execute":"guest-exec-status","arguments":{"pid":pid}})
-        try:
-            chunk = quick("tail -c +%d %s 2>/dev/null" % (off+1, log))
-            if chunk:
-                off += len(chunk)
-                sys.stdout.write(chunk.decode("utf-8","replace"))
-                sys.stdout.flush()
-        except Exception:
-            pass
-        if st.get("exited"):
-            rc = quick("cat %s 2>/dev/null" % rcf).strip()
-            sys.exit(int(rc) if rc.isdigit() else 1)
-    sys.exit("guest-exec timeout")
-if mode == "push":
-    local, remote = args
-    h = qga({"execute":"guest-file-open","arguments":{"path":remote,"mode":"w+"}})
-    try:
-        with open(local,"rb") as f:
-            while chunk := f.read(48*1024):
-                qga({"execute":"guest-file-write","arguments":
-                     {"handle":h,"buf-b64":base64.b64encode(chunk).decode()}})
-    finally:
-        qga({"execute":"guest-file-close","arguments":{"handle":h}})
-    print(f"pushed {local} -> {remote}")
-PYEOF
+# Shared QGA helper: persistent results and bounded transport recovery.
+# No temporary host-side implementation that vanishes during a retry.
+QGA_DRIVER="$REPO/scripts/qga.py"
+[ -f "$QGA_DRIVER" ] || die "missing QGA driver: $QGA_DRIVER"
 
-qga()      { python3 "$WORK/qga.py" "$VM" exec "$@"; }
-qga_lab()  { python3 "$WORK/qga.py" "$VM" exec --as lab "$@"; }
-qga_push() { python3 "$WORK/qga.py" "$VM" push "$1" "$2"; }
+qga()      { python3 "$QGA_DRIVER" "$VM" exec "$@"; }
+qga_lab()  { python3 "$QGA_DRIVER" "$VM" exec --as lab "$@"; }
+qga_push() { python3 "$QGA_DRIVER" "$VM" push "$1" "$2"; }
 
 agent_ready() {
-    python3 "$WORK/qga.py" "$VM" ping >/dev/null 2>&1 || return 1
+    python3 "$QGA_DRIVER" "$VM" ping >/dev/null 2>&1 || return 1
     # The Mint live/installer session also runs qemu-guest-agent and
     # answers pings — only the INSTALLED system has the 'lab' user.
     qga "id lab >/dev/null 2>&1" 2>/dev/null
@@ -466,7 +404,7 @@ note "base packages"
 # (the prefetcher resolves its closure into the apt bundle). Add a
 # package here without adding it there and it silently falls back to
 # the mirror — fine online, dead in an offline build.
-qga "${APT_PRELUDE}apt-get update -qq || true ; \
+python3 "$QGA_DRIVER" "$VM" exec --resume base-packages "${APT_PRELUDE}apt-get update -qq || true ; \
      DEBIAN_FRONTEND=noninteractive apt-get install -y \
      podman uidmap acl pipx python-is-python3 git curl qemu-guest-agent \
      spice-vdagent mc nodejs npm nftables"
