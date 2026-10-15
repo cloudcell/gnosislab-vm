@@ -8,8 +8,8 @@ BUILD=(ROOT/"create-lab-template").read_text()
 CACHE=(ROOT/"selfbuild/prefetch-cache.sh").read_text()
 class WarningsTests(unittest.TestCase):
     def test_private_quadlet_is_expected_and_readable_is_failure(self):
-        self.assertIn('bad trusted-quadlet-private "lab can read',SEC)
-        self.assertIn('ok trusted-quadlet-private "MCP service active',SEC)
+        self.assertIn('bad trusted-quadlet-mount "lab can read',SEC)
+        self.assertIn('ok trusted-quadlet-mount "MCP service active',SEC)
         self.assertNotIn('note trusted-quadlet-mount "mcp quadlet unreadable',SEC)
     def test_headless_display_skipped_and_hook_detected(self):
         self.assertIn("SKIP  %-34s",READY)
