@@ -666,6 +666,28 @@ ensure_vm() {
             fail "ingest.env mode verification failed"
     ' || { echo "  FAIL: trusted MCP token permissions (details above)" >&2; return 1; }
 
+    # The Quadlet binds /srv/lab/trial-env at container creation time.
+    # Earlier upgrades populated this directory only AFTER restarting MCP,
+    # leaving freshly sealed/cloned guests unable to start the container.
+    # Create the empty mcp-owned mount point now; never clear an existing
+    # environment or follow an agent-provided symlink.
+    note "verifying MCP bind-mount prerequisites"
+    qga_exec "$vm" '
+        set -eu
+        test ! -L /srv/lab/trial-env ||
+            { echo "FAIL: symlinked /srv/lab/trial-env" >&2; exit 1; }
+        install -d -m 0755 -o mcp -g mcp /srv/lab/trial-env
+        test "$(stat -c %U:%G /srv/lab/trial-env)" = mcp:mcp ||
+            { echo "FAIL: incorrect owner for /srv/lab/trial-env" >&2; exit 1; }
+        for p in /srv/lab/mcp-state /srv/lab/exchange /srv/lab/incoming; do
+            test -d "$p" && test ! -L "$p" ||
+                { echo "FAIL: missing or symlinked MCP mount: $p" >&2; exit 1; }
+        done
+        test -f /usr/local/libexec/labloop-mcp-entrypoint &&
+            test -f /etc/labloop/seccomp-labloop.json ||
+            { echo "FAIL: protected MCP runtime assets missing" >&2; exit 1; }
+    ' || { echo "  FAIL: MCP bind-mount preflight" >&2; return 1; }
+
     note "restarting trusted container on protected runtime configuration"
     qga_exec "$vm" "su - mcp -c 'XDG_RUNTIME_DIR=/run/user/\$(id -u) \
         systemctl --user daemon-reload && systemctl --user restart lab-cnt-mcp'" \

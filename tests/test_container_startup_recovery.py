@@ -35,6 +35,12 @@ class ContainerRecovery(unittest.TestCase):
         self.assertIn('test "$(stat -c %a "$file")" = 600', UPGRADE)
         self.assertIn('fail "mcp still cannot read ingest.env"', UPGRADE)
 
+    def test_mounts_exist_before_mcp_restart(self):
+        self.assertIn('note "verifying MCP bind-mount prerequisites"', UPGRADE)
+        self.assertIn("install -d -m 0755 -o mcp -g mcp /srv/lab/trial-env", UPGRADE)
+        self.assertLess(UPGRADE.index('note "verifying MCP bind-mount prerequisites"'),
+                        UPGRADE.index('note "restarting trusted container on protected runtime configuration"'))
+
     def test_health_port_expansion_is_deferred_to_container(self):
         self.assertIn("$$" + "{ML_EPISTEME_PORT}", MCP)
         self.assertNotIn("127.0.0.1:" + "${ML_EPISTEME_PORT}/health", MCP)
