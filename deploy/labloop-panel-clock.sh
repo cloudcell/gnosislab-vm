@@ -1,34 +1,43 @@
 #!/usr/bin/env bash
-# labloop-panel-clock.sh — set the XFCE panel clock to "%H:%M %Z" UTC.
-# Runs once at first graphical login via /etc/xdg/autostart — xfconf
-# state only exists once xfconfd is up in the user session, so this
-# cannot be done at provisioning time.
-#
-# The clock plugin id is discovered by VALUE: /plugins/plugin-N holds
-# the module name ("clock") — the perchannel XML only carries type
-# placeholders, so it cannot be parsed for this.
-stamp="$HOME/.config/.labloop-clock-done"
-[ -e "$stamp" ] && exit 0
-mkdir -p "$HOME/.config"
+# Keep the XFCE panel clock in UTC with the explicit timezone suffix.
+# Runs at each graphical login via /etc/xdg/autostart; no one-shot stamp.
+# Older clones can run it again in the active lab GUI session.
+set -euo pipefail
 
-export DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/$(id -u)/bus"
+export DBUS_SESSION_BUS_ADDRESS="${DBUS_SESSION_BUS_ADDRESS:-unix:path=/run/user/$(id -u)/bus}"
 export DISPLAY="${DISPLAY:-:0}"
 
-# wait for xfconfd to materialize /plugins/* (first-login race)
-pid=""
-for _ in $(seq 60); do
-    pid="$(xfconf-query -c xfce4-panel -lv 2>/dev/null | awk \
-        '$1 ~ /^\/plugins\/plugin-[0-9]+$/ && $2 == "clock" {
-             sub(".*/", "", $1); print $1; exit}')"
-    [ -n "$pid" ] && break
-    sleep 2
+# The panel plugin id is assigned dynamically. Wait for xfconfd and
+# plugin registration, not an arbitrary fixed panel instance number.
+clock_plugin=""
+for _ in $(seq 30); do
+    clock_plugin="$(xfconf-query -c xfce4-panel -lv 2>/dev/null | awk '
+        $1 ~ /^\/plugins\/plugin-[0-9]+$/ && $2 == "clock" {
+            sub(".*/", "", $1); print $1; exit
+        }')"
+    [ -n "$clock_plugin" ] && break
+    sleep 1
 done
-[ -n "$pid" ] || exit 0
+if [ -z "$clock_plugin" ]; then
+    echo "labloop-panel-clock: no XFCE clock plugin found; retry at next login" >&2
+    exit 1
+fi
 
-for kv in "digital-time-format=%H:%M %Z" "timezone=UTC"; do
-    prop="/plugins/$pid/${kv%%=*}"; val="${kv#*=}"
-    xfconf-query -c xfce4-panel -p "$prop" -n -t string -s "$val" 2>/dev/null \
-        || xfconf-query -c xfce4-panel -p "$prop" -s "$val" 2>/dev/null || true
+# Write live xfconf state: XFCE's digital clock uses strftime(3).
+# Use the plugin-local timezone rather than relying on the host's TZ.
+# Create new properties, or update existing ones, then verify both.
+for setting in "timezone=UTC" "digital-time-format=%H:%M %Z"; do
+    property="/plugins/$clock_plugin/${setting%%=*}"
+    value="${setting#*=}"
+    current="$(xfconf-query -c xfce4-panel -p "$property" 2>/dev/null || true)"
+    [ "$current" = "$value" ] && continue
+    if ! xfconf-query -c xfce4-panel -p "$property" -s "$value" 2>/dev/null; then
+        xfconf-query -c xfce4-panel -p "$property" --create -t string -s "$value"
+    fi
+    actual="$(xfconf-query -c xfce4-panel -p "$property" 2>/dev/null || true)"
+    if [ "$actual" != "$value" ]; then
+        echo "labloop-panel-clock: could not apply $property" >&2
+        exit 1
+    fi
 done
-xfce4-panel -r >/dev/null 2>&1 || true
-touch "$stamp"
+# xfconf changes notify the running panel, no disruptive forced restart.
