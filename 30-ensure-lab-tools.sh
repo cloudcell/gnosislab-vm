@@ -585,6 +585,29 @@ ensure_vm() {
         echo "  quadlet already current"
     fi
 
+    # When an image was absent at an earlier startup, systemd may have
+    # exhausted its restart limit. Replacing/restoring the image does not
+    # change the Quadlet file; recover an inactive service explicitly.
+    # Keep the working experiment container untouched when it is active.
+    if [ "$exp_quadlet_failed" = 0 ] &&
+       ! qga_exec "$vm" "su - exp -c 'export XDG_RUNTIME_DIR=/run/user/\$(id -u);
+           systemctl --user is-active --quiet lab-cnt-exp'" >/dev/null 2>&1; then
+        note "experiment service inactive — clearing failure limit and starting"
+        qga_exec "$vm" "su - exp -c 'export XDG_RUNTIME_DIR=/run/user/\$(id -u);
+            systemctl --user reset-failed lab-cnt-exp &&
+            systemctl --user daemon-reload &&
+            systemctl --user start lab-cnt-exp'" ||
+            { echo "  FAIL: cannot recover inactive experiment container" >&2; exp_quadlet_failed=1; }
+    fi
+    # A successful upgrade must never report healthy if the experiment
+    # service was left stopped, even when its Quadlet definition matches.
+    if [ "$exp_quadlet_failed" = 0 ] &&
+       ! qga_exec "$vm" "su - exp -c 'export XDG_RUNTIME_DIR=/run/user/\$(id -u);
+           systemctl --user is-active --quiet lab-cnt-exp'" >/dev/null 2>&1; then
+        echo "  FAIL: experiment container remains inactive" >&2
+        exp_quadlet_failed=1
+    fi
+
     if [ "$have_ports" = 1 ]; then
     changed=$(qga_exec "$vm" "
         if cmp -s /tmp/ensure-lab-cnt-mcp.container \
