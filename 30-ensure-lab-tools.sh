@@ -432,13 +432,20 @@ ensure_vm() {
         cmp -s /tmp/ensure-watchdog.timer \
                /home/mcp/.config/systemd/user/labloop-mcp-watchdog.timer &&
         $ports_cmp &&
+        # Files alone do not establish runtime readiness. In particular
+        # an unchanged exp Quadlet can still be failed from an earlier
+        # missing-image startup. Let the normal recovery path repair it.
+        su - exp -c 'export XDG_RUNTIME_DIR=/run/user/\$(id -u);
+            systemctl --user is-active --quiet lab-cnt-exp' \
+            >/dev/null 2>&1 &&
         su - mcp -c 'export XDG_RUNTIME_DIR=/run/user/\$(id -u);
             systemctl --user is-enabled --quiet labloop-mcp-watchdog.timer' \
             >/dev/null 2>&1 &&
         su - mcp -c 'export XDG_RUNTIME_DIR=/run/user/\$(id -u);
             podman exec lab-cnt-mcp /opt/trial-env/bin/python -c \"import numpy\"' \
             >/dev/null 2>&1$diag_cmp" >/dev/null 2>&1 || need=1
-    [ "$need" = 0 ] && [ "$REBUILD_IMAGE" = 0 ] \
+    [ "$need" = 0 ] && [ "$REBUILD_IMAGE" = 0 ] &&
+        [ "$REBUILD_EXP" = 0 ] \
         && { echo "  already current"; return 0; }
 
     note "installing (root side)"
