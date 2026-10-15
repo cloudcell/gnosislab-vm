@@ -74,7 +74,7 @@ OCC=~/.config/opencode/opencode.jsonc
 if [ -f "$OCC" ] && grep -Eq '"host-local"|"vllm"' "$OCC"; then
     ok opencode-local "host-local model provider configured"
 else
-    warn opencode-local "configure with ~/Desktop/configure-host-models.py"
+    warn opencode-local "configure with ~/Desktop/optional-patches/configure-host-models.py"
 fi
 if curl --max-time 3 -fsS http://192.168.122.1:8002/v1/models >/dev/null 2>&1; then
     ok host-llm "host LLM reachable on default endpoint"
@@ -96,10 +96,16 @@ elif [ "$OCBIN" != /usr/local/bin/opencode ]; then
     warn opencode-updater "$OCBIN shadows managed launcher"
 elif [ ! -x /usr/local/bin/opencode ]; then
     bad opencode-updater "launcher missing"
-elif ! "$USERBIN" --version | grep -Eq '^2[.]'; then
-    bad opencode-updater "V2 executable failed version probe"
+elif ! version=$("$USERBIN" --version 2>/dev/null); then
+    bad opencode-updater "user-local OpenCode executable failed to report its version"
+elif ! printf '%s\\n' "$version" | grep -Eq '^((opencode[[:space:]]+)?v?2[.][0-9]+[.][0-9]+)'; then
+    bad opencode-updater "unexpected V2 version format: $version"
+elif ! launcher_version=$(/usr/local/bin/opencode --version 2>/dev/null); then
+    bad opencode-updater "system launcher failed to report its version"
+elif [ "$version" != "$launcher_version" ]; then
+    bad opencode-updater "launcher version $launcher_version differs from direct version $version"
 else
-    ok opencode-updater "lab-owned OpenCode V2 ELF in detected curl installation path"
+    ok opencode-updater "lab-owned OpenCode $version; launcher matches"
 fi
 
 ZC=~/.config/VSCodium/User/globalStorage/zoocodeorganization.zoo-code/settings/mcp_settings.json
