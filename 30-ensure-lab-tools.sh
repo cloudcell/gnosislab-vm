@@ -409,8 +409,8 @@ ensure_vm() {
                /home/lab/Desktop/check-lab-ready.sh &&
         test -x /home/lab/.opencode/bin/opencode &&
         cmp -s /tmp/ensure-opencode-launcher /usr/local/bin/opencode &&
-        test "$(stat -c %U /home/lab/.opencode/bin/opencode 2>/dev/null)" = lab &&
-        test "$(head -c 4 /home/lab/.opencode/bin/opencode 2>/dev/null | od -An -tx1 | tr -d "[:space:]")" = 7f454c46 &&
+        test \$(stat -c %U /home/lab/.opencode/bin/opencode 2>/dev/null) = lab &&
+        test \$(head -c 4 /home/lab/.opencode/bin/opencode 2>/dev/null | od -An -tx1 | tr -d '[:space:]') = 7f454c46 &&
         cmp -s /tmp/ensure-opencode-update-command.md \
             /home/lab/.config/opencode/commands/update.md &&
         test -f /home/lab/.config/opencode/opencode.json &&
@@ -526,16 +526,16 @@ ensure_vm() {
         { test -e /home/lab/.config/opencode/opencode.jsonc ||
           install -m 0644 -o lab -g lab /tmp/ensure-opencode.jsonc \
                 /home/lab/.config/opencode/opencode.jsonc; } &&
-        { test -e /home/lab/.opencode/bin/opencode ||
+        { test -x /home/lab/.opencode/bin/opencode ||
           { test -f /usr/local/bin/opencode && test ! -L /usr/local/bin/opencode &&
-            test "$(head -c 4 /usr/local/bin/opencode | od -An -tx1 | tr -d "[:space:]")" = 7f454c46 &&
+            test \$(head -c 4 /usr/local/bin/opencode | od -An -tx1 | tr -d '[:space:]') = 7f454c46 &&
             install -m 0755 -o lab -g lab /usr/local/bin/opencode \
                 /home/lab/.opencode/bin/opencode; }; } &&
         test -f /home/lab/.opencode/bin/opencode &&
         test ! -L /home/lab/.opencode/bin/opencode &&
-        test "$(stat -c %U /home/lab/.opencode/bin/opencode)" = lab &&
-        test "$(head -c 4 /home/lab/.opencode/bin/opencode | od -An -tx1 | tr -d "[:space:]")" = 7f454c46 &&
-        /home/lab/.opencode/bin/opencode --version | grep -Eq "^2[.]+" &&
+        test \$(stat -c %U /home/lab/.opencode/bin/opencode) = lab &&
+        test \$(head -c 4 /home/lab/.opencode/bin/opencode | od -An -tx1 | tr -d '[:space:]') = 7f454c46 &&
+        /home/lab/.opencode/bin/opencode --version | grep -Eq '^2[.]' &&
         install -m 0755 -o root -g root /tmp/ensure-opencode-launcher \
             /usr/local/bin/opencode &&
         install -m 0644 -o lab -g lab /tmp/ensure-opencode-update-command.md \
@@ -551,7 +551,7 @@ ensure_vm() {
         install -m 0644 -o lab -g lab /tmp/ensure-labloop-tmpfiles.conf \
             /srv/lab/workspace/ml-labloop/deploy/labloop-tmpfiles.conf &&
         install -d -o lab -g lab /srv/lab/workspace/ml-labloop/containers/mcp" \
-        || echo "  warn: workspace refresh failed (workspace absent?)"
+        || { echo "  FAIL: workspace/OpenCode provisioning failed; refusing partial success" >&2; return 1; }
 
     if ((${#diag_names[@]})); then
         note "installing diagnostics -> ~/Desktop/diagnostics"
