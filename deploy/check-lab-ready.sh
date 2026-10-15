@@ -98,7 +98,7 @@ elif [ ! -x /usr/local/bin/opencode ]; then
     bad opencode-updater "launcher missing"
 elif ! version=$("$USERBIN" --version 2>/dev/null); then
     bad opencode-updater "user-local OpenCode executable failed to report its version"
-elif ! printf '%s\n' "$version" | grep -Eq '^(opencode[[:space:]]+)?v?2\.[0-9]+\.[0-9]+([-.+][[:alnum:].-]+)?
+elif ! printf '%s\n' "$version" | grep -Eq '^(opencode[[:space:]]+)?v?2\.[0-9]+\.[0-9]+([.+-][[:alnum:].-]+)?
 
 ZC=~/.config/VSCodium/User/globalStorage/zoocodeorganization.zoo-code/settings/mcp_settings.json
 if [ -f "$ZC" ]; then
