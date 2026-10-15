@@ -42,10 +42,6 @@ lab ALL=(mcp) NOPASSWD: /usr/local/sbin/labloop-fault, /usr/local/sbin/labloop-f
 # and is confined to /srv/lab/exchange by the script's realpath gate.
 lab ALL=(root) NOPASSWD: /usr/local/sbin/labloop-export --all
 
-# labloop-update-opencode <semver> (deploy/labloop-update-opencode):
-# deliberate in-VM upgrade of the driver-zone agent CLI. The package
-# name is hardcoded and the version semver-validated inside the wrapper
-# because npm install runs lifecycle scripts as root. NO NOPASSWD on
-# purpose — the lab login password gates it, making this a human-only
-# action the agent cannot invoke on its own.
-lab ALL=(root) /usr/local/sbin/labloop-update-opencode *
+# OpenCode V2 uses a lab-owned executable and updates through
+# 'opencode upgrade' as lab. There is deliberately no root sudo grant
+# for package updates or agent-controlled npm scripts.
