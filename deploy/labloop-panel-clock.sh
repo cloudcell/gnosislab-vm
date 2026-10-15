@@ -26,7 +26,10 @@ if [ -z "$plugin" ]; then
 fi
 
 set_property() {
-    local key="$1" value="$2" property="$plugin/$key"
+    # Bash expands RHS of a multi-name local declaration before it assigns
+    # any of those names. With set -u, referencing $key here used to abort.
+    local key="$1" value="$2"
+    local property="$plugin/$key"
     if ! xfconf-query -c xfce4-panel -p "$property" -s "$value" 2>/dev/null; then
         xfconf-query -c xfce4-panel -p "$property" --create -t string -s "$value"
     fi
