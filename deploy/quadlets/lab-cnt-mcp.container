@@ -67,6 +67,8 @@ Volume=/srv/lab/trial-env:/opt/trial-env
 # desync the check. The /opt/*/ glob matches /opt/ml-scientist on
 # pre-gnosislab images and /opt/gnosislab on packaged ones — the probe
 # is vintage-agnostic.
+# Quadlet turns this into a systemd ExecStart= argument. The doubled $
+# preserves the variable for the container shell instead of systemd.
 HealthCmd=/bin/sh -c '. /opt/*/ports.env; exec /usr/bin/curl -m 5 -sf http://127.0.0.1:${ML_EPISTEME_PORT}/health'
 HealthInterval=30s
 HealthRetries=3
