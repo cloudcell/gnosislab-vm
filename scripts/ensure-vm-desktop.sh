@@ -40,6 +40,13 @@ if ! python3 "$DRIVER" "$vm" ping; then
     exit 1
 fi
 
+# The historical template creates ~/workspace, but cloned/scrubbed VMs
+# can lose it. Restore the authoring directory independently of MCP.
+# Refuse a symlink here rather than changing ownership through it.
+qga 'test ! -L /home/lab/workspace &&
+    install -d -m 0755 -o lab -g lab /home/lab/workspace /home/lab/workspace/experiments &&
+    test -d /home/lab/workspace/experiments' ||
+    { echo "FAIL: cannot restore lab authoring workspace" >&2; exit 1; }
 qga 'install -d -m 0755 -o lab -g lab /home/lab/Desktop \
     /home/lab/.local/share/icons /home/lab/.local/share/applications \
     /home/lab/Desktop/diagnostics /home/lab/Desktop/optional-patches'
@@ -110,7 +117,8 @@ qga 'set -eu
     test -s /home/lab/Desktop/opencode.desktop
     test -s /home/lab/Desktop/README.md
     test -x /home/lab/Desktop/check-lab-ready.sh
-    test -x /usr/local/bin/opencode-lab'
+    test -x /usr/local/bin/opencode-lab
+    test -d /home/lab/workspace/experiments'
 qga 'chown -R lab:lab /home/lab/Desktop/diagnostics /home/lab/Desktop/optional-patches &&
     find /home/lab/Desktop/diagnostics /home/lab/Desktop/optional-patches -type f -name "*.sh" -exec chmod 0755 {} + &&
     chmod 0755 /home/lab/Desktop/optional-patches/configure-host-models.py &&
