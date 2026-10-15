@@ -81,23 +81,25 @@ if curl --max-time 3 -fsS http://192.168.122.1:8002/v1/models >/dev/null 2>&1; t
 else
     warn host-llm "default host endpoint unavailable (may use custom endpoint)"
 fi
-# opencode shadow/drift — WARN only. The npm pin lives at
-# /usr/local/bin/opencode (root-owned); a self-update instead drops a
-# lab-owned standalone binary under ~/.opencode + a shim in ~/.local/bin
-# that wins PATH precedence. Not a privilege crossing (still lab code),
-# so it warns rather than fails — but the pinned version is no longer
-# what runs, and provenance becomes unverified.
+# V2 updater detects the curl installation only when the running ELF
+# lives at /home/lab/.opencode/bin/opencode; the system entry is a
+# root-owned launcher, not the executable it runs.
 OCBIN="$(command -v opencode 2>/dev/null || true)"
-if [ -n "$OCBIN" ] && [ "$OCBIN" != "/usr/local/bin/opencode" ]; then
-    warn opencode-shadowed "$OCBIN wins PATH — expected /usr/local/bin (self-update shim?)"
-elif [ -n "$OCBIN" ]; then
-    runv="$(opencode --version 2>/dev/null | grep -o '[0-9][0-9.]*' | head -1)"
-    pinv="$(grep -o '"version": *"[0-9.]*"' \
-        /usr/local/lib/node_modules/@opencode/cli/package.json 2>/dev/null \
-        | grep -o '[0-9][0-9.]*' | head -1)"
-    if [ -n "$pinv" ] && [ -n "$runv" ] && [ "$runv" != "$pinv" ]; then
-        warn opencode-version "running $runv but npm pin is $pinv"
-    fi
+USERBIN=/home/lab/.opencode/bin/opencode
+if [ ! -f "$USERBIN" ] || [ -L "$USERBIN" ] || [ ! -x "$USERBIN" ]; then
+    bad opencode-updater "user-local V2 executable absent or unsafe"
+elif [ "$(stat -c %U "$USERBIN" 2>/dev/null)" != lab ]; then
+    bad opencode-updater "OpenCode executable must be lab-owned"
+elif [ "$(head -c 4 "$USERBIN" | od -An -tx1 | tr -d '[:space:]')" != 7f454c46 ]; then
+    bad opencode-updater "user-local executable is not an ELF binary"
+elif [ "$OCBIN" != /usr/local/bin/opencode ]; then
+    warn opencode-updater "$OCBIN shadows managed launcher"
+elif [ ! -x /usr/local/bin/opencode ]; then
+    bad opencode-updater "launcher missing"
+elif ! "$USERBIN" --version | grep -Eq '^2[.]'; then
+    bad opencode-updater "V2 executable failed version probe"
+else
+    ok opencode-updater "lab-owned OpenCode V2 ELF in detected curl installation path"
 fi
 
 ZC=~/.config/VSCodium/User/globalStorage/zoocodeorganization.zoo-code/settings/mcp_settings.json
