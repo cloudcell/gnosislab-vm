@@ -15,5 +15,9 @@ class InstallMethodTests(unittest.TestCase):
   self.assertIn('bad opencode-updater',READY)
   self.assertIn('ok opencode-updater',READY)
   self.assertNotIn('npm pin is',READY)
+    def test_custom_update_uses_curl_method(self):
+        cmd=(ROOT/"deploy/opencode-update-command.md").read_text()
+        self.assertIn("upgrade --method curl",cmd)
+        self.assertIn("explicit confirmation",cmd)
 if __name__=="__main__":
  unittest.main()
