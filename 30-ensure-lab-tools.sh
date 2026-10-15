@@ -521,8 +521,36 @@ ensure_vm() {
         done
     fi
 
+    # Scrubbed/cloned guests can retain the users but lose their Quadlet
+    # directories. The original template creates these before startup;
+    # reconstruct only the expected per-user directories, without touching
+    # container storage or trusting anything in the lab workspace.
+    # Refuse symlinked ancestors to avoid crossing the account boundary.
+    note "ensuring exp/mcp Quadlet directories"
+    qga_exec "$vm" '
+        set -eu
+        for account in exp mcp; do
+            test "$(getent passwd "$account" | cut -d: -f6)" = "/home/$account" || exit 1
+            home="/home/$account"
+            for path in "$home" "$home/.config" "$home/.config/containers" \
+                        "$home/.config/containers/systemd"; do
+                if test -L "$path"; then
+                    echo "refusing symlinked Quadlet path: $path" >&2
+                    exit 1
+                fi
+            done
+            install -d -m 0755 -o "$account" -g "$account" \
+                "$home/.config" "$home/.config/containers" \
+                "$home/.config/containers/systemd"
+            test "$(stat -c %U:%G "$home/.config/containers/systemd")" = \
+                "$account:$account" || exit 1
+        done' || {
+        echo "  FAIL: exp/mcp Quadlet directory preflight" >&2
+        return 1
+    }
+
     # quadlet: update definition; restart lab-cnt-exp only if it changed
-    local changed
+    local changed exp_quadlet_failed=0
     changed=$(qga_exec "$vm" "
         if cmp -s /tmp/ensure-lab-cnt-exp.container \
                   /home/exp/.config/containers/systemd/lab-cnt-exp.container 2>/dev/null; then
@@ -535,7 +563,7 @@ ensure_vm() {
                 /home/exp/.config/containers/systemd/lab-cnt-exp.container &&
             su - exp -c 'XDG_RUNTIME_DIR=/run/user/\$(id -u) \
                 systemctl --user daemon-reload && systemctl --user restart lab-cnt-exp'" \
-            || echo "  warn: quadlet install/restart failed"
+            || { echo "  FAIL: hostile-zone quadlet install/restart" >&2; exp_quadlet_failed=1; }
     else
         echo "  quadlet already current"
     fi
@@ -635,6 +663,10 @@ ensure_vm() {
             || echo "  warn: trial-env population failed (egress? mcp container up?)"
     else
         echo "  trial-env already populated"
+    fi
+    if [ "$exp_quadlet_failed" = 1 ]; then
+        echo "  FAIL: trusted MCP update completed, but hostile-zone Quadlet needs repair" >&2
+        return 1
     fi
     echo "  done: $vm has extraction (labloop-export) + ingest (/incoming)"
 }
