@@ -921,7 +921,7 @@ note "Zoo Code provider seed (openai-compatible -> host vLLM)"
 qga_push "$REPO/deploy/seed-zoo-state.py" /tmp/seed-zoo-state.py
 qga_lab "python3 /tmp/seed-zoo-state.py"
 
-note "opencode CLI 2.0.15 via npm + MCP config (global path — found from any cwd)"
+note "OpenCode V2: user-owned executable + updatable configuration"
 # cache path: @opencode/cli is a 2 KB launcher whose real payload is an
 # optionalDependency platform binary (a registry fetch even from the
 # tgz). So prefetch-cache.sh packs the linux-x64 tarballs directly and
@@ -936,21 +936,28 @@ if [ -n "$oc_tgz" ] && [ -n "${oc_base:-}" ]; then
     qga "curl -fsS -o '/tmp/$oc_tgz' '$CACHE_URL/pkgs/$oc_tgz' && \
          curl -fsS -o '/tmp/$oc_base' '$CACHE_URL/pkgs/$oc_base' && \
          if grep -qw avx2 /proc/cpuinfo; then t='$oc_tgz'; else t='$oc_base'; fi && \
-         tar xzf \"/tmp/\$t\" -O package/bin/opencode > /usr/local/bin/opencode && \
-         chmod 755 /usr/local/bin/opencode && rm -f '/tmp/$oc_tgz' '/tmp/$oc_base'"
+         install -d -o lab -g lab -m 0755 /home/lab/.opencode /home/lab/.opencode/bin && \
+         tar xzf \"/tmp/\$t\" -O package/bin/opencode > /home/lab/.opencode/bin/opencode && \
+         chown lab:lab /home/lab/.opencode/bin/opencode && \
+         chmod 755 /home/lab/.opencode/bin/opencode && rm -f '/tmp/$oc_tgz' '/tmp/$oc_base'"
 else
-    qga "rm -f /usr/local/bin/opencode && npm install -g @opencode/cli@2.0.15"
+    qga "install -d -o lab -g lab -m 0755 /home/lab/.opencode/bin" && \
+    qga_lab "curl -fsSL https://opencode.ai/install | bash"
 fi
 qga_push "$REPO/deploy/opencode.json" /tmp/opencode.json
 qga_push "$REPO/deploy/opencode.jsonc" /tmp/opencode.jsonc
 qga_push "$REPO/deploy/configure-host-models.py" /tmp/configure-host-models.py
+qga_push "$REPO/deploy/opencode-update-command.md" /tmp/opencode-update-command.md
+qga_push "$REPO/deploy/opencode-launcher" /tmp/opencode-launcher
 qga "test ! -L /home/lab/Desktop && \
-     install -d -m 0755 -o lab -g lab /home/lab/Desktop /home/lab/.config/opencode && \
+     install -d -m 0755 -o lab -g lab /home/lab/Desktop /home/lab/.config/opencode /home/lab/.config/opencode/commands && \
+     install -m 0755 -o root -g root /tmp/opencode-launcher /usr/local/bin/opencode && \
+     install -m 0644 -o lab -g lab /tmp/opencode-update-command.md /home/lab/.config/opencode/commands/update.md && \
      install -m 0644 -o lab -g lab /tmp/opencode.json \
          /home/lab/.config/opencode/opencode.json && \
      install -m 0644 -o lab -g lab /tmp/opencode.jsonc \
          /home/lab/.config/opencode/opencode.jsonc && \
-     rm -f /tmp/opencode.json /tmp/opencode.jsonc && \
+     rm -f /tmp/opencode.json /tmp/opencode.jsonc /tmp/opencode-update-command.md /tmp/opencode-launcher && \
      install -m 0755 -o lab -g lab /tmp/configure-host-models.py /home/lab/Desktop/configure-host-models.py && \
      chown -R lab:lab /home/lab/.config"
 

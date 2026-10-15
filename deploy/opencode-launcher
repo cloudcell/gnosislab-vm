@@ -1,0 +1,6 @@
+#!/usr/bin/env bash
+# Stable system PATH entry; the executable itself belongs to lab.
+set -euo pipefail
+bin=/home/lab/.opencode/bin/opencode
+[ -x "$bin" ] || { echo "OpenCode missing: $bin" >&2; exit 127; }
+exec "$bin" "$@"
