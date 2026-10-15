@@ -237,11 +237,11 @@ done
 # this unprivileged battery checks only non-disclosure.
 MCP_UNIT=/home/mcp/.config/containers/systemd/lab-cnt-mcp.container
 if [ -r "$MCP_UNIT" ]; then
-    bad trusted-quadlet-private "lab can read the dedicated MCP service definition"
+    bad trusted-quadlet-mount "lab can read the dedicated MCP service definition"
 elif pgrep -u mcp -f 'labloop-mcp' >/dev/null 2>&1; then
-    ok trusted-quadlet-private "MCP service active; Quadlet inaccessible to lab (expected)"
+    ok trusted-quadlet-mount "MCP service active; Quadlet inaccessible to lab (expected)"
 else
-    bad trusted-quadlet-private "Quadlet inaccessible and MCP service not observed"
+    bad trusted-quadlet-mount "Quadlet inaccessible and MCP service not observed"
 fi
 # --- host-side zone separation -----------------------------------------
 # deterministic permission checks (no exp shell needed): verify the
