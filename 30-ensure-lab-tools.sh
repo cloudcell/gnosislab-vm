@@ -186,9 +186,25 @@ ensure_vm() {
              check-lab-ready.sh \
              labloop-display.sh labloop-display.desktop \
              labloop-display-lightdm.conf \
-             opencode.json opencode.jsonc configure-host-models.py; do
+             opencode.json opencode.jsonc configure-host-models.py \
+             opencode-launcher opencode-update-command.md opencode-v2-migrate.py; do
         qga_push "$vm" "$REPO/deploy/$f" "/tmp/ensure-$f"
     done
+    qga_exec "$vm" 'set -eu
+        b=/home/lab/.opencode/bin/opencode
+        t=/usr/local/bin/opencode
+        n=/usr/local/bin/.opencode-new
+        test -f "$b" && test ! -L "$b" && test -x "$b"
+        test "$(stat -c %U "$b")" = lab
+        test "$(head -c 4 "$b" | od -An -tx1 | tr -d "[:space:]")" = 7f454c46
+        install -m 0755 -o root -g root /tmp/ensure-opencode-launcher "$n"
+        cmp -s "$n" /tmp/ensure-opencode-launcher
+        mv -f -T "$n" "$t"
+        direct=$(su - lab -c "$b --version")
+        actual=$(su - lab -c "$t --version")
+        test "$direct" = "$actual"
+        echo "  OpenCode direct/launcher: $actual"
+    ' || { echo "FAIL: OpenCode launcher repair" >&2; return 1; }
     qga_push "$vm" "$WORK/display.conf" /tmp/ensure-display.conf
     # render the hostile-zone ceiling against the guest's ACTUAL size
     # (~5/8 of its vcpus, ~3/4 of its RAM) — the quadlet carries
@@ -526,18 +542,7 @@ ensure_vm() {
         { test -e /home/lab/.config/opencode/opencode.jsonc ||
           install -m 0644 -o lab -g lab /tmp/ensure-opencode.jsonc \
                 /home/lab/.config/opencode/opencode.jsonc; } &&
-        { test -x /home/lab/.opencode/bin/opencode ||
-          { test -f /usr/local/bin/opencode && test ! -L /usr/local/bin/opencode &&
-            test \$(head -c 4 /usr/local/bin/opencode | od -An -tx1 | tr -d '[:space:]') = 7f454c46 &&
-            install -m 0755 -o lab -g lab /usr/local/bin/opencode \
-                /home/lab/.opencode/bin/opencode; }; } &&
-        test -f /home/lab/.opencode/bin/opencode &&
-        test ! -L /home/lab/.opencode/bin/opencode &&
-        test \$(stat -c %U /home/lab/.opencode/bin/opencode) = lab &&
-        test \$(head -c 4 /home/lab/.opencode/bin/opencode | od -An -tx1 | tr -d '[:space:]') = 7f454c46 &&
-        /home/lab/.opencode/bin/opencode --version | grep -Eq '^2[.]' &&
-        install -m 0755 -o root -g root /tmp/ensure-opencode-launcher \
-            /usr/local/bin/opencode &&
+        cmp -s /tmp/ensure-opencode-launcher /usr/local/bin/opencode &&
         install -m 0644 -o lab -g lab /tmp/ensure-opencode-update-command.md \
             /home/lab/.config/opencode/commands/update.md &&
         install -m 0755 -o lab -g lab /tmp/ensure-opencode-v2-migrate.py \
