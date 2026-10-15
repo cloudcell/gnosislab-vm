@@ -7,7 +7,8 @@ Comment=AI coding agent in the GnosisLab driver workspace
 # than closing immediately when the CLI exits.
 Exec=xfce4-terminal --hold --title=OpenCode --execute /usr/local/bin/opencode-lab
 Icon=/home/lab/.local/share/icons/opencode.png
-Path=/home/lab/workspace
+# Workspace is created by opencode-lab if the VM was scrubbed.
+# No Path= entry: a missing directory must not block starting the terminal.
 Terminal=false
 Categories=Development;
 StartupNotify=false
