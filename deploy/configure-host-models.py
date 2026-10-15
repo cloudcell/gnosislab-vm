@@ -38,11 +38,11 @@ def build_provider(ids, url, context, output):
         models[model] = definition
     return {
         "$schema": "https://opencode.ai/config.json",
-        "provider": {
+        "providers": {
             "host-local": {
-                "npm": "@ai-sdk/openai-compatible",
+                "package": "aisdk:@ai-sdk/openai-compatible",
                 "name": "Host local models",
-                "options": {"baseURL": url},
+                "settings": {"baseURL": url},
                 "models": models,
             }
         },
@@ -93,14 +93,14 @@ def main():
             if ('"Local vLLM (host)"' in old and
                     '"http://192.168.122.1:8002/v1"' in old and
                     '"models": {}' in old):
-                existing = {"$schema": "https://opencode.ai/config.json", "provider": {}}
+                existing = {"$schema": "https://opencode.ai/config.json", "providers": {}}
             else:
                 parser.exit(1, f"{args.file} contains custom commented JSONC; "
                             "back it up and migrate manually.\\n")
-        providers = existing.get("provider", {})
+        providers = existing.pop("providers", existing.pop("provider", {}))
         providers.pop("vllm", None)
-        providers.update(config["provider"])
-        existing["provider"] = providers
+        providers.update(config["providers"])
+        existing["providers"] = providers
         config = existing
     tmp = args.file.with_name(args.file.name + ".new")
     tmp.write_text(json.dumps(config, indent=2) + "\n")
