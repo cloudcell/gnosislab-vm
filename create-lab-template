@@ -454,6 +454,10 @@ qga "grep -q '^lab:' /etc/subuid || echo 'lab:100000:65536' >> /etc/subuid; \
      grep -q '^mcp:' /etc/subgid || echo 'mcp:231072:65536' >> /etc/subgid"
 
 note "/srv/lab layout + ACLs"
+# The parent is deliberately root-owned/private, so each identity needs
+# traverse-only access (search, not listing). Bind-mount sources must be
+# accessible to the rootless Podman owner before its Quadlet starts.
+# The trusted state remains mcp-owned 0700 and inaccessible to exp/lab.
 # guest execs run under /bin/sh (dash): no brace expansion — spell out
 qga "rmdir '/srv/lab/{workspace,exchange,mcp-state,experiments}' 2>/dev/null; \
      mkdir -p /srv/lab/workspace /srv/lab/exchange /srv/lab/mcp-state /srv/lab/experiments \
@@ -462,10 +466,14 @@ qga "rmdir '/srv/lab/{workspace,exchange,mcp-state,experiments}' 2>/dev/null; \
      chown mcp:mcp /srv/lab/mcp-state && \
      chown exp:exp /srv/lab/exchange /srv/lab/experiments && \
      chmod 700 /srv/lab/mcp-state && \
-     setfacl -m u:exp:rx /srv/lab/workspace && \
-     setfacl -m u:mcp:rx /srv/lab/workspace && \
-     setfacl -m u:lab:rwx /srv/lab/exchange && \
-     setfacl -d -m o::rX /srv/lab/exchange"
+     setfacl -m u:lab:--x,u:exp:--x,u:mcp:--x /srv/lab && \
+     setfacl -m u:exp:r-x,u:mcp:r-x /srv/lab/workspace && \
+     setfacl -m u:exp:r-x,u:mcp:r-x /srv/lab/incoming && \
+     setfacl -m u:lab:rwx,u:mcp:r-x /srv/lab/exchange && \
+     setfacl -d -m o::rX /srv/lab/exchange && \
+     su - exp -c 'test -x /srv/lab && test -r /srv/lab/workspace && test -w /srv/lab/exchange && test ! -r /srv/lab/mcp-state' && \
+     su - mcp -c 'test -x /srv/lab && test -r /srv/lab/incoming && test -r /srv/lab/exchange' && \
+     su - lab -c 'test -x /srv/lab && test -w /srv/lab/workspace && test ! -r /srv/lab/mcp-state'"
 
 note "staging whitelisted payloads on the host"
 # WHITELIST, not blacklist: only what the guest needs crosses the agent
