@@ -543,8 +543,9 @@ ensure_vm() {
         install -m 0755 -o lab -g lab /tmp/ensure-opencode-v2-migrate.py \
             /home/lab/.config/opencode/opencode-v2-migrate.py &&
         su - lab -c 'python3 /home/lab/.config/opencode/opencode-v2-migrate.py' &&
+        install -d -m 0755 -o lab -g lab /home/lab/Desktop/optional-patches &&
         install -m 0755 -o lab -g lab /tmp/ensure-configure-host-models.py \
-            /home/lab/Desktop/configure-host-models.py &&
+            /home/lab/Desktop/optional-patches/configure-host-models.py &&
         install -m 0440 -o lab -g lab /tmp/ensure-labloop.sudoers \
             /srv/lab/workspace/ml-labloop/deploy/labloop.sudoers &&
         install -m 0644 -o lab -g lab /tmp/ensure-labloop-tmpfiles.conf \
