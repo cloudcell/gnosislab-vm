@@ -104,6 +104,12 @@ fi
 # 2. shut down
 # ------------------------------------------------------------------
 running && shutdown_vm
+# Offline hard gate: do not seal a base OS that never finished
+# GnosisLab provisioning. A snapshot is not evidence of completion.
+note "verifying completed template before sealing"
+sudo virt-cat -d "$VM" /etc/gnosislab-vm/template-ready 2>/dev/null \
+    | grep -qx gnosislab-vm-template-ready-v1 ||
+    die "template lacks provisioning-complete marker; do not seal or clone it. Inspect the build log and repair the template."
 
 # ------------------------------------------------------------------
 # 3. scrub identity
