@@ -1,4 +1,6 @@
 ---
-description: Update OpenCode V2 using its built-in upgrader
+description: Upgrade OpenCode V2 using the official curl installer
 ---
-Ask for my explicit confirmation before doing anything. After I approve, run `opencode upgrade` as the current lab user (never via sudo), report its output and the version reported by `opencode --version`. Tell me to restart OpenCode to load the new binary. Do not edit or overwrite my configuration, and do not attempt to upgrade if running under root.
+Before doing anything, ask me for explicit confirmation to upgrade OpenCode and wait for my approval. If approved, run `/home/lab/.opencode/bin/opencode upgrade --method curl` as the `lab` user (never use sudo or npm). This GnosisLab-VM installation is provisioned using the official curl-style executable path, so explicitly pass `--method curl`; do not rely on autodetection.
+
+If the command fails, show its actual stderr/stdout and do not claim success or attempt a fallback installation. After it succeeds, run `/home/lab/.opencode/bin/opencode --version` and report the installed version. Remind me to close and reopen the OpenCode TUI so its running process uses the updated binary. Do not change, regenerate, or overwrite OpenCode configuration, MCP servers, model providers, or reasoning variants.
