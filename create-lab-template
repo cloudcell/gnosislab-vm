@@ -1064,6 +1064,19 @@ qga "efibootmgr -c -d /dev/vda -p 1 -L ubuntu \
      || efibootmgr -c -d /dev/vda -p 1 -L ubuntu \
         -l '\EFI\ubuntu\grubx64.efi' || true"
 
+# Write this marker only AFTER the security and functional batteries,
+# required packages, runtime services and bootloader have succeeded.
+# 01 and 02 refuse to seal or clone any guest lacking this evidence.
+# The marker records successful provisioning; it is not a runtime check.
+note "recording completed template provisioning"
+qga "install -d -m 0755 -o root -g root /etc/gnosislab-vm && \
+     printf 'gnosislab-vm-template-ready-v1\\n' \
+         > /etc/gnosislab-vm/template-ready && \
+     chown root:root /etc/gnosislab-vm/template-ready && \
+     chmod 0644 /etc/gnosislab-vm/template-ready && \
+     grep -qx gnosislab-vm-template-ready-v1 \
+         /etc/gnosislab-vm/template-ready" || die "cannot mark template ready"
+
 note "shutdown"
 # the agent channel dies mid-poll when the guest powers off — expected
 qga "systemctl poweroff" 2>/dev/null || true

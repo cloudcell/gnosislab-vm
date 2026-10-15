@@ -99,6 +99,13 @@ qga_push() { python3 "$QGA_DRIVER" "$vm" push "$@"; }
 agent_ready() { python3 "$QGA_DRIVER" "$vm" ping >/dev/null 2>&1; }
 
 # ------------------------------------------------------------------
+# A sealed snapshot and machine-id only establish scrubbing.
+# Validate template provisioning BEFORE creating a qcow2 clone.
+note "verifying complete GnosisLab template"
+sudo virt-cat -d "$TEMPLATE" /etc/gnosislab-vm/template-ready 2>/dev/null \
+    | grep -qx gnosislab-vm-template-ready-v1 ||
+    die "template '$TEMPLATE' is not a completed GnosisLab image. No clone created. Choose a verified template with LABLOOP_TEMPLATE or finish its provisioning."
+
 note "virt-clone $TEMPLATE -> $vm"
 sudo virt-clone --original "$TEMPLATE" --name "$vm" --auto-clone
 
