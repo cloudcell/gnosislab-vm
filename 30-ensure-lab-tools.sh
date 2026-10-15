@@ -118,6 +118,14 @@ rebuild_mcp_image() {
     # This is also the deliberate 38xxx -> 28xxx migration: the rebuilt
     # image carries the gnosislab port block, and the next ports.env
     # derive picks it up everywhere downstream automatically.
+    if [ "$GNOSISLAB_VER" = latest ]; then
+        [ -s "$CACHE_ROOT/gnosislab-version" ] ||
+            { echo "  FAIL: set GNOSISLAB_VER or warm the artifact cache first" >&2; return 1; }
+        GNOSISLAB_VER="$(cat "$CACHE_ROOT/gnosislab-version")"
+        echo "  note: pinned cached GnosisLab release $GNOSISLAB_VER"
+    fi
+    [[ "$GNOSISLAB_VER" =~ ^[0-9][A-Za-z0-9.+_-]*$ ]] ||
+        { echo "  FAIL: invalid GnosisLab version" >&2; return 1; }
     note "staging gnosislab==$GNOSISLAB_VER build context"
     rm -rf "$WORK/mcp"
     mkdir -p "$WORK/mcp/pkgs/wheels" "$WORK/mcp/pkgs/gnosislab"
