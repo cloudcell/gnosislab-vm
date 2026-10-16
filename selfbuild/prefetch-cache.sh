@@ -45,11 +45,11 @@ TRIAL_PKGS="numpy pandas scipy scikit-learn matplotlib reportlab"
 UVX_PKGS="uv duckduckgo-mcp-server"
 VSIX_EXTS="ZooCodeOrganization.zoo-code tomoki1207.pdf"
 
-# opencode version: create-lab-template's npm line is the single source
-# of truth — read it up front so have_pkgs can demand THIS version (a
-# bump there must make the pkgs layer non-ok, else ensure never refetches)
-OC_VER=$(grep -oE '@opencode/cli@[0-9]+\.[0-9]+\.[0-9]+' \
-         "$REPO/create-lab-template" | head -1 | cut -d@ -f3)
+# opencode version: create-lab-template's OC_VER line is the single
+# source of truth — eval the assignment so its env override + default
+# both apply here (a bump must make the pkgs layer non-ok → refetch)
+eval "$(sed -n '/^OC_VER=/p' "$REPO/create-lab-template")"
+OC_VER="${OC_VER:-}"
 
 # gnosislab version: create-lab-template's GNOSISLAB_VER line is the
 # single source of truth — eval the assignment so its env override +
