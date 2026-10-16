@@ -103,7 +103,15 @@ d-i clock-setup/ntp boolean true
 ubiquity ubiquity/reboot boolean true
 
 ### partitioning: erase disk, guided atomic recipe, answer every
-### confirmation the partitioner would otherwise show
+### confirmation the partitioner would otherwise show. The target is
+### pinned to the virtio disk: the unattended ISO now rides the SCSI
+### bus as a cdrom, and partman's auto-selection must never settle on
+### the wrong device ("selected disk too small"). The early_command
+### wait also covers the race where ubiquity starts before virtio_blk
+### has finished probing.
+d-i partman/early_command string \
+    for i in $(seq 60); do [ -b /dev/vda ] && break; sleep 1; done
+d-i partman-auto/disk string /dev/vda
 d-i partman-auto/method string regular
 d-i partman-auto/choose_recipe select atomic
 d-i partman/default_filesystem string ext4
