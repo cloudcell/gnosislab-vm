@@ -163,14 +163,14 @@ echo "==> patching boot configs for unattended boot"
 for cfg in "$WORK/iso/boot/grub/grub.cfg" "$WORK/iso/boot/grub/loopback.cfg"; do
     [ -f "$cfg" ] || continue
     sed -i '1i set default=0\nset timeout=2' "$cfg"
-    sed -i '/^[[:space:]]*linux[[:space:]]/ s| --[[:space:]]*$| automatic-ubiquity noprompt file=/cdrom/preseed.cfg keyboard-configuration/layoutcode=us console-setup/layoutcode=us debian-installer/locale=en_US.UTF-8 debconf/priority=critical console=ttyS0,115200n8 --|' "$cfg"
+    sed -i '/^[[:space:]]*linux[[:space:]]/ s| --[[:space:]]*$| automatic-ubiquity noprompt file=/cdrom/preseed.cfg keyboard-configuration/layoutcode=us console-setup/layoutcode=us debian-installer/locale=en_US.UTF-8 debconf/priority=critical console=ttyS0,115200n8 console=tty0 --|' "$cfg"
 done
 # isolinux.cfg (BIOS fallback): same injection on APPEND lines,
 # timeout is in deciseconds
 for cfg in "$WORK"/iso/isolinux/*.cfg "$WORK"/iso/syslinux/*.cfg; do
     [ -f "$cfg" ] || continue
     sed -i 's/^timeout .*/timeout 20/' "$cfg"
-    sed -i '/^[[:space:]]*append[[:space:]]/ s| --[[:space:]]*$| automatic-ubiquity noprompt file=/cdrom/preseed.cfg keyboard-configuration/layoutcode=us console-setup/layoutcode=us debian-installer/locale=en_US.UTF-8 debconf/priority=critical console=ttyS0,115200n8 --|I' "$cfg"
+    sed -i '/^[[:space:]]*append[[:space:]]/ s| --[[:space:]]*$| automatic-ubiquity noprompt file=/cdrom/preseed.cfg keyboard-configuration/layoutcode=us console-setup/layoutcode=us debian-installer/locale=en_US.UTF-8 debconf/priority=critical console=ttyS0,115200n8 console=tty0 --|I' "$cfg"
 done
 grep -l "automatic-ubiquity" "$WORK/iso/boot/grub/grub.cfg" >/dev/null \
     || { echo "ERROR: grub.cfg patch did not apply" >&2; exit 1; }
