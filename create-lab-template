@@ -313,7 +313,7 @@ else
     note "virt-install: $VM (${MEM_MIB}MiB / ${VCPUS}vcpu / 80G qcow2 / UEFI / SPICE / disk: $BUILD_DIR)"
     virt-install --connect qemu:///system --name "$VM" \
         --memory "$MEM_MIB" --vcpus "$VCPUS" \
-        --disk path="$BUILD_DIR/$VM.qcow2",format=qcow2,bus=virtio,cache=unsafe \
+        --disk path="$BUILD_DIR/$VM.qcow2",driver.type=qcow2,bus=virtio,cache=unsafe \
         --controller type=scsi,model=virtio-scsi \
         --disk "$ISO",device=cdrom,bus=scsi,readonly=on \
         --os-variant generic \
