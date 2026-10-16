@@ -166,13 +166,29 @@ fi
 # pids.peak proves the ceiling held, pids.events 'max' proves the cap
 # was actually hit (i.e. the burst exceeded it), and a fresh exec
 # proves the container survived. catatonit (RunInit) reaps the orphans.
+#
+# sleep 30, not 8: on a loaded host the spawn loop can run so slowly
+# that 8s lifetimes expire before 512 are co-resident — the cgroup is
+# then never reached and the probe reads peak<lim, events=0, which is
+# indistinguishable from a broken cap. 30s gives ~4x the spawn window
+# (observed: ~25 forks/s under vLLM+VM load needed >64/s at sleep 8).
+# 'kill' is a bash builtin — it needs no fork, so it drains the set
+# even while the cgroup is still saturated.
 EV0=$($EXP_EXEC awk '/^max/{print $2}' /sys/fs/cgroup/pids.events 2>/dev/null)
-$EXP_EXEC timeout 20 bash -c \
-    'for i in $(seq 700); do sleep 8 & done 2>/dev/null' >/dev/null 2>&1
+$EXP_EXEC timeout 60 bash -c \
+    'for i in $(seq 700); do sleep 30 & done 2>/dev/null; \
+     kill $(jobs -p) 2>/dev/null; wait 2>/dev/null' >/dev/null 2>&1
 sleep 3
 PEAK=$($EXP_EXEC cat /sys/fs/cgroup/pids.peak 2>/dev/null)
 EV1=$($EXP_EXEC awk '/^max/{print $2}' /sys/fs/cgroup/pids.events 2>/dev/null)
 LIM=$($EXP_EXEC cat /sys/fs/cgroup/pids.max 2>/dev/null)
+# a timed-out spawn leaves survivors for up to ~30s; later probes need
+# fork headroom, so wait for the cgroup to drain before moving on.
+for _ in $(seq 25); do
+    cur=$($EXP_EXEC cat /sys/fs/cgroup/pids.current 2>/dev/null)
+    [ -n "$cur" ] && [ "$cur" -lt $(( ${LIM:-512} - 64 )) ] && break
+    sleep 2
+done
 # kernel quirk: pids.peak can overshoot pids.max by a few — the
 # charge is recorded before the limit check rejects the fork
 if [ -n "$PEAK" ] && [ -n "$LIM" ] && [ "$PEAK" -le $((LIM + 16)) ] 2>/dev/null \
