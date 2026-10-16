@@ -35,6 +35,11 @@ REPO="$(cd "$(dirname "$0")" && pwd)"
 # newest PyPI release at build time so a template never bakes a stale
 # runtime; set GNOSISLAB_VER to a version to pin (required offline).
 GNOSISLAB_VER="${GNOSISLAB_VER:-latest}"
+# opencode agent-binary pin — single source of truth; prefetch-cache.sh
+# evals this line (a bump → its pkgs layer non-ok → refetch). The guest
+# installs exactly this version, from prefetched tarballs when the
+# cache is up or fetched in-guest otherwise.
+OC_VER="${OC_VER:-2.0.15}"
 ISO="${LABLOOP_ISO:-}"
 VIRSH="virsh -c qemu:///system"
 WORK="$(mktemp -d)"
@@ -927,12 +932,9 @@ note "OpenCode V2: user-owned executable + updatable configuration"
 # tgz). So prefetch-cache.sh packs the linux-x64 tarballs directly and
 # we install package/bin/opencode ourselves — choosing baseline vs
 # regular by /proc/cpuinfo, exactly like the package's postinstall.mjs.
-oc_tgz=""
-if [ "$CACHE_UP" = 1 ]; then
-    oc_tgz=$(basename "$(ls -t "$CACHE_ROOT"/pkgs/opencode-cli-linux-x64-[0-9]*.tgz 2>/dev/null | head -1)" 2>/dev/null || true)
-    oc_base=$(basename "$(ls -t "$CACHE_ROOT"/pkgs/opencode-cli-linux-x64-baseline-*.tgz 2>/dev/null | head -1)" 2>/dev/null || true)
-fi
-if [ -n "$oc_tgz" ] && [ -n "${oc_base:-}" ]; then
+oc_tgz="opencode-cli-linux-x64-${OC_VER}.tgz"
+oc_base="opencode-cli-linux-x64-baseline-${OC_VER}.tgz"
+if [ "$CACHE_UP" = 1 ] && [ -f "$CACHE_ROOT/pkgs/$oc_tgz" ] && [ -f "$CACHE_ROOT/pkgs/$oc_base" ]; then
     qga "curl -fsS -o '/tmp/$oc_tgz' '$CACHE_URL/pkgs/$oc_tgz' && \
          curl -fsS -o '/tmp/$oc_base' '$CACHE_URL/pkgs/$oc_base' && \
          if grep -qw avx2 /proc/cpuinfo; then t='$oc_tgz'; else t='$oc_base'; fi && \
@@ -941,8 +943,15 @@ if [ -n "$oc_tgz" ] && [ -n "${oc_base:-}" ]; then
          chown lab:lab /home/lab/.opencode/bin/opencode && \
          chmod 755 /home/lab/.opencode/bin/opencode && rm -f '/tmp/$oc_tgz' '/tmp/$oc_base'"
 else
-    qga "install -d -o lab -g lab -m 0755 /home/lab/.opencode/bin" && \
-    qga_lab "curl -fsSL https://opencode.ai/install | bash"
+    # no cache — fetch the pinned npm tarballs in-guest and install the
+    # same user-owned layout (never the unpinned install script)
+    qga_lab "install -d -m 0755 /home/lab/.opencode /home/lab/.opencode/bin && \
+         cd /tmp && \
+         npm pack '@opencode/cli-linux-x64@$OC_VER' --silent >/dev/null && \
+         npm pack '@opencode/cli-linux-x64-baseline@$OC_VER' --silent >/dev/null && \
+         if grep -qw avx2 /proc/cpuinfo; then t='$oc_tgz'; else t='$oc_base'; fi && \
+         tar xzf \"/tmp/\$t\" -O package/bin/opencode > /home/lab/.opencode/bin/opencode && \
+         chmod 755 /home/lab/.opencode/bin/opencode && rm -f /tmp/opencode-cli-*.tgz"
 fi
 qga_push "$REPO/deploy/opencode.json" /tmp/opencode.json
 qga_push "$REPO/deploy/opencode.jsonc" /tmp/opencode.jsonc
