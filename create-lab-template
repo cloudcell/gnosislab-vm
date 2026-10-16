@@ -120,6 +120,24 @@ fi
 EXP_CPUS=$(( VCPUS * 5 / 8 )); [ "$EXP_CPUS" -lt 1 ] && EXP_CPUS=1
 EXP_MEM_MIB=$(( MEM_MIB * 3 / 4 ))
 
+# Build scratch disk: /var/lib/libvirt/images is typically spinning or
+# QLC NAND, and the default cache=none qcow2 turns the fsync-heavy
+# ubiquity/dpkg install into minutes of NAND stalls. When tmpfs has
+# room we build in RAM (cache=unsafe — a host crash means rebuild
+# anyway) and move the finished image to IMG_DIR after shutdown.
+# LABLOOP_BUILD_DIR pins another location; LABLOOP_TMPFS_MIN_G sets
+# the floor. The stored template XML is normalised before snapshotting.
+IMG_DIR=/var/lib/libvirt/images
+BUILD_DIR="${LABLOOP_BUILD_DIR:-}"
+if [ -z "$BUILD_DIR" ]; then
+    shm_g=$(df -BG --output=avail /dev/shm 2>/dev/null | tail -1 | tr -dc 0-9)
+    if [ "${shm_g:-0}" -ge "${LABLOOP_TMPFS_MIN_G:-48}" ]; then
+        BUILD_DIR=/dev/shm/labloop-build
+    else
+        BUILD_DIR=$IMG_DIR
+    fi
+fi
+
 # ------------------------------------------------------------------
 # Phase 0 — preflight
 # ------------------------------------------------------------------
@@ -287,17 +305,23 @@ else
       sudo setfacl -m u:$qemu_user:r \"$ISO\""
         fi
     fi
-    note "virt-install: $VM (${MEM_MIB}MiB / ${VCPUS}vcpu / 80G qcow2 / UEFI / SPICE)"
+    if [ "$BUILD_DIR" != "$IMG_DIR" ]; then
+        mkdir -p "$BUILD_DIR" 2>/dev/null || sudo mkdir -p "$BUILD_DIR"
+        chmod 1777 "$BUILD_DIR" 2>/dev/null || sudo chmod 1777 "$BUILD_DIR"
+    fi
+    qemu-img create -f qcow2 "$BUILD_DIR/$VM.qcow2" 80G >/dev/null
+    note "virt-install: $VM (${MEM_MIB}MiB / ${VCPUS}vcpu / 80G qcow2 / UEFI / SPICE / disk: $BUILD_DIR)"
     virt-install --connect qemu:///system --name "$VM" \
         --memory "$MEM_MIB" --vcpus "$VCPUS" \
-        --disk size=80,format=qcow2,bus=virtio \
-        --cdrom "$ISO" \
+        --disk path="$BUILD_DIR/$VM.qcow2",format=qcow2,bus=virtio,cache=unsafe \
+        --controller type=scsi,model=virtio-scsi \
+        --disk "$ISO",device=cdrom,bus=scsi,readonly=on \
         --os-variant generic \
         --network network=default,model=virtio \
         --graphics spice,listen=127.0.0.1 \
         --video virtio \
         --channel unix,target.type=virtio,target.name=org.qemu.guest_agent.0 \
-        --boot uefi --noautoconsole
+        --install bootdev=cdrom --boot uefi --noautoconsole
     # virt-install's emitted boot order is version-dependent: some builds
     # write only <boot dev='hd'/> under firmware='efi', which drops a fresh
     # domain into the UEFI shell (blank disk). Pin cdrom-first ordering;
@@ -1213,9 +1237,26 @@ for _ in $(seq 60); do
 done
 [ "$($VIRSH domstate "$VM")" = "shut off" ] || die "$VM did not shut down"
 
+# tmpfs build -> images dir: one sequential copy at the end instead of
+# an install's worth of random NAND writes. cache='unsafe' was for the
+# RAM-backed build; the stored template keeps the default cache policy.
+build_disk=$($VIRSH domblklist --inactive "$VM" | awk '$NF ~ /\.qcow2$/ {print $NF; exit}')
+relocated_from=""
+case "$build_disk" in
+    /dev/shm/*)
+        note "relocating image: $build_disk -> $IMG_DIR/$VM.qcow2"
+        sudo mv "$build_disk" "$IMG_DIR/$VM.qcow2" \
+            || die "cannot move $build_disk to $IMG_DIR"
+        relocated_from="$build_disk"
+        ;;
+esac
+
 note "XML hardening: clipboard=off, native ${RES_X}x${RES_Y}"
 $VIRSH dumpxml --inactive "$VM" > "$WORK/dom.xml"
 python3 "$REPO/scripts/vm_display_xml.py" "$WORK/dom.xml" "$RES_X" "$RES_Y"
+[ -z "$relocated_from" ] || \
+    sed -i "s|$relocated_from|$IMG_DIR/$VM.qcow2|g" "$WORK/dom.xml"
+sed -i "s| cache='unsafe'||g" "$WORK/dom.xml"
 $VIRSH define "$WORK/dom.xml" >/dev/null
 
 # snp-vN: monotonic across BOTH naming eras — count pre-freeze-vN too
